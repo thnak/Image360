@@ -1,6 +1,8 @@
 #include "HeaderFiles/CudaPipeline.h"
 #include "HeaderFiles/median_stack.cuh"
+#include "HeaderFiles/tensor_ops.cuh"
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include <cstring>
 #include <cmath>
 #include <vector>
@@ -111,6 +113,9 @@ namespace WindowsApp::Compute
         m_ctx->gpuInfo.computeMinor = prop.minor;
         m_ctx->gpuInfo.maxThreadsPerBlock = prop.maxThreadsPerBlock;
         m_ctx->gpuInfo.multiProcessorCount = prop.multiProcessorCount;
+
+        // Tensor cores available on Volta+ (SM 7.0+), Turing (SM 7.5+), Ampere (SM 8.0+), Ada (SM 8.9+), Hopper (SM 9.0+)
+        m_ctx->gpuInfo.hasTensorCores = (prop.major >= 7);
 
         // Query free memory
         size_t free, total;
@@ -501,5 +506,263 @@ namespace WindowsApp::Compute
     void CudaPipeline::SetError(const char* msg)
     {
         strncpy_s(m_lastError, sizeof(m_lastError), msg, _TRUNCATE);
+    }
+
+    // =========================================================================
+    // Tensor Core: Batch Matrix Multiply
+    // =========================================================================
+    ComputeResult CudaPipeline::TensorBatchMatMul(
+        const float* A, const float* B, float* C,
+        int batchA_M, int batchA_K, int batchB_N,
+        int batchSize)
+    {
+        if (!m_ctx->initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!A || !B || !C) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (!m_ctx->gpuInfo.hasTensorCores) { SetError("Tensor cores not available (requires SM 7.0+)."); return ComputeResult::CUDA_ERROR; }
+
+        // Convert FP32 inputs to FP16
+        size_t sizeA = (size_t)batchSize * batchA_M * batchA_K;
+        size_t sizeB = (size_t)batchSize * batchA_K * batchB_N;
+        size_t sizeC = (size_t)batchSize * batchA_M * batchB_N;
+
+        __half* d_A_half = nullptr;
+        __half* d_B_half = nullptr;
+        float* d_C = nullptr;
+        float* d_A_float = nullptr;
+        float* d_B_float = nullptr;
+
+        CUDA_CHECK(cudaMalloc(&d_A_half, sizeA * sizeof(__half)));
+        CUDA_CHECK(cudaMalloc(&d_B_half, sizeB * sizeof(__half)));
+        CUDA_CHECK(cudaMalloc(&d_C, sizeC * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_A_float, sizeA * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_B_float, sizeB * sizeof(float)));
+
+        CUDA_CHECK(cudaMemcpy(d_A_float, A, sizeA * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_B_float, B, sizeB * sizeof(float), cudaMemcpyHostToDevice));
+
+        // Convert FP32 -> FP16
+        int threads = 256;
+        Kernels::FloatToHalf<<<(sizeA + threads - 1) / threads, threads>>>(d_A_float, d_A_half, (int)sizeA);
+        CUDA_CHECK(cudaGetLastError());
+        Kernels::FloatToHalf<<<(sizeB + threads - 1) / threads, threads>>>(d_B_float, d_B_half, (int)sizeB);
+        CUDA_CHECK(cudaGetLastError());
+
+        // Launch WMMA batched matmul
+        // Each block handles one batch, warps handle 16x16 tiles
+        int tilesM = (batchA_M + 15) / 16;
+        int tilesN = (batchB_N + 15) / 16;
+        int warpsNeeded = tilesM * tilesN;
+        int threadsPerBlock = min(warpsNeeded * 32, 1024);
+
+        dim3 grid(tilesN, tilesM, batchSize);
+        dim3 block(threadsPerBlock);
+
+        Kernels::TensorBatchMatMul<<<grid, block>>>(
+            d_A_half, d_B_half, d_C,
+            batchA_M, batchA_K, batchB_N, batchSize);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        CUDA_CHECK(cudaMemcpy(C, d_C, sizeC * sizeof(float), cudaMemcpyDeviceToHost));
+
+        cudaFree(d_A_half);
+        cudaFree(d_B_half);
+        cudaFree(d_C);
+        cudaFree(d_A_float);
+        cudaFree(d_B_float);
+
+        return ComputeResult::SUCCESS;
+    }
+
+    // =========================================================================
+    // Tensor Core: Homography Estimation
+    // =========================================================================
+    ComputeResult CudaPipeline::TensorEstimateHomography(
+        const float* pointPairs, float* homography, int numPairs)
+    {
+        if (!m_ctx->initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!pointPairs || !homography) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (numPairs < 4) { SetError("Need at least 4 point correspondences."); return ComputeResult::INVALID_PARAM; }
+
+        // Allocate device memory
+        float* d_pairs = nullptr;
+        float* d_AtA = nullptr;
+        float* d_AtA_copy = nullptr;
+        float* d_h = nullptr;
+
+        CUDA_CHECK(cudaMalloc(&d_pairs, numPairs * 4 * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_AtA, 9 * 9 * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_AtA_copy, 9 * 9 * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_h, 9 * sizeof(float)));
+
+        CUDA_CHECK(cudaMemcpy(d_pairs, pointPairs, numPairs * 4 * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemset(d_AtA, 0, 9 * 9 * sizeof(float)));
+        CUDA_CHECK(cudaMemset(d_h, 0, 9 * sizeof(float)));
+
+        // Build AtA
+        int threads = 256;
+        Kernels::TensorBuildAtA<<<1, threads>>>(d_pairs, d_AtA, numPairs);
+        CUDA_CHECK(cudaGetLastError());
+
+        // Build Atb from the same point pairs
+        // Atb[i] = sum over correspondences of A_row0[i]*xp + A_row1[i]*yp
+        // Compute on CPU for simplicity (9 elements)
+        float Atb[9] = {};
+        for (int p = 0; p < numPairs; p++)
+        {
+            float x = pointPairs[p * 4 + 0];
+            float y = pointPairs[p * 4 + 1];
+            float xp = pointPairs[p * 4 + 2];
+            float yp = pointPairs[p * 4 + 3];
+
+            float a0[9] = { -x, -y, -1.0f, 0, 0, 0, x * xp, y * xp, xp };
+            float a1[9] = { 0, 0, 0, -x, -y, -1.0f, x * yp, y * yp, yp };
+
+            for (int i = 0; i < 9; i++)
+                Atb[i] += a0[i] * xp + a1[i] * yp;
+        }
+
+        float* d_AtA_ref = nullptr;
+        float* d_AtA_out = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_AtA_ref, 9 * 9 * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_AtA_out, 9 * 9 * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(d_AtA_ref, Atb, 9 * sizeof(float), cudaMemcpyHostToDevice));
+
+        // Solve via Cholesky on GPU
+        // Copy AtA for in-place decomposition
+        CUDA_CHECK(cudaMemcpy(d_AtA_copy, d_AtA, 9 * 9 * sizeof(float), cudaMemcpyDeviceToDevice));
+
+        Kernels::TensorSolveHomography<<<1, 1>>>(d_AtA_copy, d_AtA_ref, d_h);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Copy result
+        CUDA_CHECK(cudaMemcpy(homography, d_h, 9 * sizeof(float), cudaMemcpyDeviceToHost));
+
+        // Normalize so h[8] = 1
+        if (fabsf(homography[8]) > 1e-10f)
+        {
+            float inv = 1.0f / homography[8];
+            for (int i = 0; i < 9; i++)
+                homography[i] *= inv;
+        }
+
+        cudaFree(d_pairs);
+        cudaFree(d_AtA);
+        cudaFree(d_AtA_copy);
+        cudaFree(d_h);
+        cudaFree(d_AtA_ref);
+        cudaFree(d_AtA_out);
+
+        return ComputeResult::SUCCESS;
+    }
+
+    // =========================================================================
+    // Tensor Core: Normal Equations for Bundle Adjustment
+    // =========================================================================
+    ComputeResult CudaPipeline::TensorSolveNormalEquations(
+        const float* J, const float* r, float* delta,
+        int numResiduals, int numParams, float lambda)
+    {
+        if (!m_ctx->initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!J || !r || !delta) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (!m_ctx->gpuInfo.hasTensorCores) { SetError("Tensor cores not available (requires SM 7.0+)."); return ComputeResult::CUDA_ERROR; }
+
+        size_t J_size = (size_t)numResiduals * numParams;
+        size_t JtJ_size = (size_t)numParams * numParams;
+
+        // Allocate device memory
+        __half* d_J_half = nullptr;
+        float* d_J = nullptr;
+        float* d_r = nullptr;
+        float* d_JtJ = nullptr;
+        float* d_Jtr = nullptr;
+
+        CUDA_CHECK(cudaMalloc(&d_J_half, J_size * sizeof(__half)));
+        CUDA_CHECK(cudaMalloc(&d_J, J_size * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_r, numResiduals * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_JtJ, JtJ_size * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_Jtr, numParams * sizeof(float)));
+
+        CUDA_CHECK(cudaMemcpy(d_J, J, J_size * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_r, r, numResiduals * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemset(d_JtJ, 0, JtJ_size * sizeof(float)));
+        CUDA_CHECK(cudaMemset(d_Jtr, 0, numParams * sizeof(float)));
+
+        // Convert J to FP16 for tensor core matmul
+        int threads = 256;
+        Kernels::FloatToHalf<<<(J_size + threads - 1) / threads, threads>>>(d_J, d_J_half, (int)J_size);
+        CUDA_CHECK(cudaGetLastError());
+
+        // Compute normal equations: JtJ = J^T * J + lambda * I, Jtr = J^T * r
+        int totalElements = numParams * numParams;
+        Kernels::TensorNormalEquations<<<(totalElements + threads - 1) / threads, threads>>>(
+            d_J_half, d_r, d_JtJ, d_Jtr, numResiduals, numParams);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Add LM damping: JtJ += lambda * diag(JtJ)
+        // Done on CPU for small systems, or on GPU for large ones
+        std::vector<float> h_JtJ(JtJ_size);
+        std::vector<float> h_Jtr(numParams);
+        CUDA_CHECK(cudaMemcpy(h_JtJ.data(), d_JtJ, JtJ_size * sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_Jtr.data(), d_Jtr, numParams * sizeof(float), cudaMemcpyDeviceToHost));
+
+        for (int i = 0; i < numParams; i++)
+        {
+            h_JtJ[i * numParams + i] *= (1.0f + lambda);
+        }
+
+        // Solve using Cholesky (CPU for small systems typical in BA)
+        // For production, use cuBLAS/cuSolver on GPU
+        std::vector<float> L(numParams * numParams, 0.0f);
+        std::vector<float> y(numParams, 0.0f);
+
+        // Cholesky decomposition
+        for (int i = 0; i < numParams; i++)
+        {
+            for (int j = 0; j <= i; j++)
+            {
+                float sum = 0.0f;
+                for (int k = 0; k < j; k++)
+                    sum += L[i * numParams + k] * L[j * numParams + k];
+
+                if (i == j)
+                {
+                    float diag = h_JtJ[i * numParams + i] - sum;
+                    L[i * numParams + j] = sqrtf(fmaxf(diag, 1e-10f));
+                }
+                else
+                {
+                    L[i * numParams + j] = (h_JtJ[i * numParams + j] - sum) / L[j * numParams + j];
+                }
+            }
+        }
+
+        // Forward substitution
+        for (int i = 0; i < numParams; i++)
+        {
+            float sum = 0.0f;
+            for (int k = 0; k < i; k++)
+                sum += L[i * numParams + k] * y[k];
+            y[i] = (h_Jtr[i] - sum) / L[i * numParams + i];
+        }
+
+        // Backward substitution
+        for (int i = numParams - 1; i >= 0; i--)
+        {
+            float sum = 0.0f;
+            for (int k = i + 1; k < numParams; k++)
+                sum += L[k * numParams + i] * delta[k];
+            delta[i] = (y[i] - sum) / L[i * numParams + i];
+        }
+
+        cudaFree(d_J_half);
+        cudaFree(d_J);
+        cudaFree(d_r);
+        cudaFree(d_JtJ);
+        cudaFree(d_Jtr);
+
+        return ComputeResult::SUCCESS;
     }
 }

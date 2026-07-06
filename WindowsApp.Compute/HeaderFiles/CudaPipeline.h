@@ -22,6 +22,7 @@ namespace WindowsApp::Compute
         int computeMinor = 0;
         int maxThreadsPerBlock = 0;
         int multiProcessorCount = 0;
+        bool hasTensorCores = false;  // Volta (SM 7.0+) or Ampere (SM 8.0+)
     };
 
     // Result codes
@@ -103,6 +104,36 @@ namespace WindowsApp::Compute
         // gain: multiplicative gain factor
         ComputeResult ApplyGain(
             unsigned short* data, int numPixels, float gain);
+
+        // =====================================================================
+        // Tensor Core Operations (requires SM 7.0+)
+        // =====================================================================
+
+        // Batch matrix multiply using tensor cores (FP16 compute, FP32 accumulate)
+        // A: batchA_M x batchA_K per batch, B: batchA_K x batchB_N per batch
+        // C: batchA_M x batchB_N per batch (output)
+        // All matrices in row-major layout, one after another for each batch.
+        ComputeResult TensorBatchMatMul(
+            const float* A, const float* B, float* C,
+            int batchA_M, int batchA_K, int batchB_N,
+            int batchSize);
+
+        // Estimate homography from point correspondences using tensor cores
+        // pointPairs: [x0,y0,x0',y0', x1,y1,x1',y1', ...] (float, 4 per pair)
+        // homography: output 3x3 matrix (float, row-major, 9 elements)
+        // numPairs: number of correspondences (minimum 4)
+        ComputeResult TensorEstimateHomography(
+            const float* pointPairs, float* homography, int numPairs);
+
+        // Solve normal equations JtJ * delta = -Jtr using tensor cores
+        // For Levenberg-Marquardt bundle adjustment step.
+        // J: Jacobian (numResiduals x numParams), row-major float
+        // r: residual vector (numResiduals)
+        // delta: output parameter update (numParams)
+        // lambda: LM damping factor
+        ComputeResult TensorSolveNormalEquations(
+            const float* J, const float* r, float* delta,
+            int numResiduals, int numParams, float lambda);
 
         // Get last error string
         const char* GetLastError() const;
