@@ -86,3 +86,10 @@ Desktop.ini
 Chiến thuật Xử lý & Tối ưu.md
 Kiến trúc Đề xuất.md
 Kiến trúc Phần mềm.md
+
+## Auto-generated WinRT headers
+**/Generated Files/
+
+## Downloaded archives
+*.zip
+LibRaw-*/
