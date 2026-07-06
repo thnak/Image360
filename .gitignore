@@ -90,6 +90,12 @@ Kiến trúc Phần mềm.md
 ## Auto-generated WinRT headers
 **/Generated Files/
 
+## MSIX packaging output
+**/AppPackages/
+*.msix
+*.appxbundle
+*.appxsym
+
 ## Downloaded archives
 *.zip
 LibRaw-*/

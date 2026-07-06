@@ -34,6 +34,7 @@
     <DebuggerType>NativeOnly</DebuggerType>
     <BackgroundTaskDebugEngines>NativeOnly</BackgroundTaskDebugEngines>
     <WinUISDKReferences>false</WinUISDKReferences>
+    <BuildProjectReferences>false</BuildProjectReferences>
   </PropertyGroup>
   <Import Project="$(WapProjPath)\Microsoft.DesktopBridge.props" />
   <PropertyGroup>
