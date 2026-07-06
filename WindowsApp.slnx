@@ -1,0 +1,14 @@
+<Solution>
+  <Configurations>
+    <Platform Name="ARM64" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="WindowsApp/WindowsApp (Package)/WindowsApp (Package).wapproj" Type="c7167f0d-bc9f-4e6e-afe1-012c56b48db5">
+    <Deploy />
+  </Project>
+  <Project Path="WindowsApp/WindowsApp/WindowsApp.vcxproj" Id="e9e11229-ef72-4280-964e-8b66f5575ba6" />
+  <Project Path="WindowsApp.Core/WindowsApp.Core.vcxproj" Id="d6b1d440-6228-4444-a1a1-9a9eb2d12b11" />
+  <Project Path="WindowsApp.Compute/WindowsApp.Compute.vcxproj" Id="c7b1d440-7228-4444-b2b2-9a9eb2d12b12" />
+  <Project Path="WindowsApp.Tests/WindowsApp.Tests.vcxproj" Id="b7b1d440-8228-4444-c3c3-9a9eb2d12b13" />
+</Solution>
