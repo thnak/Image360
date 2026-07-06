@@ -27,7 +27,7 @@ namespace WindowsApp::Core
             case LIBRAW_REQUEST_FOR_NONEXISTENT_IMAGE:
                 lastError = L"Requested image index does not exist.";
                 break;
-            case LIBRAW_INSUFFICIENT_MEMORY:
+            case LIBRAW_UNSUFFICIENT_MEMORY:
                 lastError = L"Insufficient memory for decoding.";
                 break;
             case LIBRAW_DATA_ERROR:

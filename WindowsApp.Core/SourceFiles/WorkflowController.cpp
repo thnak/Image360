@@ -629,7 +629,7 @@ namespace WindowsApp::Core
 
             auto result = m_cudaPipeline->MedianStack(
                 inputPtrs.data(), static_cast<int>(inputs.size()),
-                output.data.data(), output.width * output.height * 3);
+                output.data.data(), output.width, output.height);
 
             if (result == WindowsApp::Compute::ComputeResult::SUCCESS)
                 return true;

@@ -43,18 +43,18 @@
       <AdditionalOptions>/w %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemDefinitionGroup>
-  <ItemGroup Condition="'$(Configuration)'=='Debug'">
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup Condition="'$(Configuration)'=='Release'">
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-  </ItemGroup>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="libraw\libraw.h" />
     <ClInclude Include="libraw\libraw_alloc.h" />
