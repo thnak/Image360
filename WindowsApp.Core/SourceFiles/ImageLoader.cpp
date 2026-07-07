@@ -344,6 +344,33 @@ namespace WindowsApp::Core
         return true;
     }
 
+    bool ImageLoader::GetEmbeddedPreviewJpeg(std::vector<unsigned char>& jpegBytes)
+    {
+        if (!m_impl->isOpen)
+        {
+            m_impl->SetError(L"No file is open.");
+            return false;
+        }
+
+        int ret = m_impl->processor.unpack_thumb();
+        if (ret != LIBRAW_SUCCESS)
+        {
+            m_impl->SetErrorFromCode(ret);
+            return false;
+        }
+
+        const auto& thumb = m_impl->processor.imgdata.thumbnail;
+        if (thumb.tformat != LIBRAW_THUMBNAIL_JPEG || !thumb.thumb || thumb.tlength == 0)
+        {
+            m_impl->SetError(L"Embedded preview is not a JPEG (or is missing).");
+            return false;
+        }
+
+        const unsigned char* begin = reinterpret_cast<const unsigned char*>(thumb.thumb);
+        jpegBytes.assign(begin, begin + thumb.tlength);
+        return true;
+    }
+
     std::wstring ImageLoader::GetLastError() const
     {
         return m_impl->lastError;

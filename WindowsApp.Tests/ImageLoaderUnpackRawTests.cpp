@@ -70,5 +70,37 @@ namespace WindowsApp::Tests
             RawPlane plane;
             Assert::IsFalse(loader.UnpackRaw(plane));
         }
+
+        TEST_METHOD(GetEmbeddedPreviewJpegReadsThumbnail)
+        {
+            using namespace WindowsApp::Core;
+
+            if (!FixtureExists())
+            {
+                Assert::Inconclusive(
+                    L"No fixture RAW file at WindowsApp.Tests\\fixtures\\sample.dng - "
+                    L"add one to exercise ImageLoader::GetEmbeddedPreviewJpeg for real.");
+                return;
+            }
+
+            ImageLoader loader;
+            Assert::IsTrue(loader.Open(FixturePath()));
+
+            std::vector<unsigned char> jpegBytes;
+            Assert::IsTrue(loader.GetEmbeddedPreviewJpeg(jpegBytes));
+            Assert::IsTrue(jpegBytes.size() > 0);
+            // JPEG SOI marker.
+            Assert::AreEqual(static_cast<unsigned char>(0xFF), jpegBytes[0]);
+            Assert::AreEqual(static_cast<unsigned char>(0xD8), jpegBytes[1]);
+        }
+
+        TEST_METHOD(GetEmbeddedPreviewJpegFailsWithoutOpenFile)
+        {
+            using namespace WindowsApp::Core;
+
+            ImageLoader loader;
+            std::vector<unsigned char> jpegBytes;
+            Assert::IsFalse(loader.GetEmbeddedPreviewJpeg(jpegBytes));
+        }
     };
 }

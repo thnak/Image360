@@ -73,6 +73,13 @@ namespace WindowsApp::Core
         // Bayer-vs-exotic without duplicating that detection logic.
         bool UnpackRaw(RawPlane& output);
 
+        // Extracts the embedded preview JPEG bytes (EXIF IFD1 / LibRaw
+        // thumbnail) without touching the full-res CFA plane. Returns
+        // false (not a JPEG format thumbnail, or none present) for
+        // non-JPEG embedded thumbnails - an expected, documented gap,
+        // not silently mishandled.
+        bool GetEmbeddedPreviewJpeg(std::vector<unsigned char>& jpegBytes);
+
         // Get the last error message
         std::wstring GetLastError() const;
 
