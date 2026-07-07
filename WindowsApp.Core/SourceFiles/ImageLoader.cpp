@@ -310,19 +310,20 @@ namespace WindowsApp::Core
             output.camMul[i] = color.cam_mul[i];
         }
 
-        // cam_xyz_coeff converts the camera's XYZ color matrix into a
-        // camera-RGB -> sRGB matrix (rgb_cam). Numeric correctness needs
-        // real-hardware verification, same standing caveat as every other
+        // libraw_get_rgb_cam is the public C-API accessor for the camera-
+        // RGB -> sRGB matrix (rgb_cam) - LibRaw::cam_xyz_coeff (which
+        // derives it from cam_xyz) is a protected member, not callable
+        // from outside the LibRaw class itself (a real build error this
+        // was fixed from: MSVC C2248). Numeric correctness needs real-
+        // hardware verification, same standing caveat as every other
         // GPU/RAW-numeric path in this plan.
-        double camXyz[4][3];
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < 3; ++i)
         {
-            for (int j = 0; j < 3; ++j)
+            for (int j = 0; j < 4; ++j)
             {
-                camXyz[i][j] = color.cam_xyz[i][j];
+                output.rgbCam[i][j] = libraw_get_rgb_cam(&m_impl->processor.imgdata, i, j);
             }
         }
-        m_impl->processor.cam_xyz_coeff(output.rgbCam, camXyz);
 
         if (idata.is_foveon)
         {
