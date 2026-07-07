@@ -85,6 +85,7 @@
     <ClInclude Include="HeaderFiles\demosaic.cuh" />
     <ClInclude Include="HeaderFiles\NvJpegCodec.h" />
     <ClInclude Include="HeaderFiles\features.cuh" />
+    <ClInclude Include="HeaderFiles\color_transfer.cuh" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="SourceFiles\CudaPipeline.cpp" />
@@ -93,6 +94,7 @@
     <CudaCompile Include="SourceFiles\demosaic.cu" />
     <CudaCompile Include="SourceFiles\NvJpegCodec.cpp" />
     <CudaCompile Include="SourceFiles\features.cu" />
+    <CudaCompile Include="SourceFiles\color_transfer.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

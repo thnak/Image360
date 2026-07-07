@@ -85,6 +85,19 @@ namespace WindowsApp::Core
         }
 
         constexpr int kMaxMatchesForGain = 2000;
+
+        std::optional<int64_t> FindIngestBlobId(ProjectManager& projectManager, int imageId)
+        {
+            std::string key = std::to_string(imageId);
+            for (const auto& task : projectManager.GetTasksForStage(PipelineStage::STAGE0_INGEST))
+            {
+                if (task.unitKind == "image" && task.unitKey == key && task.status == TaskStatus::COMPLETED)
+                {
+                    return task.outputBlobId;
+                }
+            }
+            return std::nullopt;
+        }
     }
 
     OptimizeExecutor::OptimizeExecutor(ProjectManager& projectManager, StorageEngine& storageEngine,
@@ -246,10 +259,77 @@ namespace WindowsApp::Core
         return m_projectManager.UpdateImageGain(imageId, gain);
     }
 
-    // Implemented in a follow-up issue (Task 3).
-    bool OptimizeExecutor::ExecuteColorTransfer(Task& /* task */, CancellationToken /* token */)
+    bool OptimizeExecutor::ExecuteColorTransfer(Task& task, CancellationToken /* token */)
     {
-        return false;
+        if (!m_cudaPipeline) return false;
+
+        int imageId = 0;
+        try
+        {
+            imageId = std::stoi(task.unitKey);
+        }
+        catch (...)
+        {
+            return false;
+        }
+
+        auto refIdOpt = ReferenceImageId(m_projectManager);
+        if (!refIdOpt.has_value()) return false;
+        int refId = refIdOpt.value();
+
+        auto targetBlobId = FindIngestBlobId(m_projectManager, imageId);
+        if (!targetBlobId.has_value()) return false;
+
+        auto targetBuffer = m_storageEngine.ReadPixelBuffer(targetBlobId.value());
+        if (!targetBuffer.has_value()) return false;
+
+        if (imageId == refId)
+        {
+            // No-op passthrough for the reference image itself, so Render
+            // can uniformly read "the color-transfer output blob" for
+            // every image without a reference-image special case.
+            auto blobId = m_storageEngine.WritePixelBuffer(targetBuffer.value(), "color_corrected_rgb48");
+            if (!blobId.has_value()) return false;
+            task.outputBlobId = blobId;
+            return true;
+        }
+
+        auto refBlobId = FindIngestBlobId(m_projectManager, refId);
+        if (!refBlobId.has_value()) return false;
+
+        auto refBuffer = m_storageEngine.ReadPixelBuffer(refBlobId.value());
+        if (!refBuffer.has_value()) return false;
+
+        double refMean[3];
+        double refStd[3];
+        if (m_cudaPipeline->ComputeLabStats(refBuffer->data.data(), refBuffer->width, refBuffer->height, refMean, refStd)
+            != Compute::ComputeResult::SUCCESS)
+        {
+            return false;
+        }
+
+        double targetMean[3];
+        double targetStd[3];
+        if (m_cudaPipeline->ComputeLabStats(targetBuffer->data.data(), targetBuffer->width, targetBuffer->height, targetMean, targetStd)
+            != Compute::ComputeResult::SUCCESS)
+        {
+            return false;
+        }
+
+        PixelBuffer transferred = targetBuffer.value();
+        if (m_cudaPipeline->ApplyReinhardColorTransfer(
+                transferred.data.data(), transferred.width, transferred.height,
+                targetMean, targetStd, refMean, refStd)
+            != Compute::ComputeResult::SUCCESS)
+        {
+            return false;
+        }
+
+        auto blobId = m_storageEngine.WritePixelBuffer(transferred, "color_corrected_rgb48");
+        if (!blobId.has_value()) return false;
+
+        task.outputBlobId = blobId;
+        return true;
     }
 
     // Implemented in a follow-up issue (Task 4).

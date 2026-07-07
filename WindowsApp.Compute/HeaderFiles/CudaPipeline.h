@@ -161,6 +161,19 @@ namespace WindowsApp { namespace Compute
             float ratioThreshold = 0.75f);
 
         // =====================================================================
+        // Optimize: Reinhard color transfer (docs/ARCHITECTURE.md SS4.3)
+        // =====================================================================
+        // outMean/outStd: 3 doubles (L, a, b channels).
+        ComputeResult ComputeLabStats(
+            const unsigned short* rgb, int width, int height, double outMean[3], double outStd[3]);
+
+        // rgbInOut: width*height*3, modified in place.
+        ComputeResult ApplyReinhardColorTransfer(
+            unsigned short* rgbInOut, int width, int height,
+            const double srcMean[3], const double srcStd[3],
+            const double refMean[3], const double refStd[3]);
+
+        // =====================================================================
         // Tensor Core Operations (requires SM 7.0+)
         // =====================================================================
 

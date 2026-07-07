@@ -3,6 +3,7 @@
 #include "HeaderFiles/tensor_ops.cuh"
 #include "HeaderFiles/demosaic.cuh"
 #include "HeaderFiles/features.cuh"
+#include "HeaderFiles/color_transfer.cuh"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cstring>
@@ -685,6 +686,124 @@ namespace WindowsApp { namespace Compute
         cudaFree(d_descB);
         cudaFree(d_matches);
         cudaFree(d_matchCount);
+
+        return ComputeResult::SUCCESS;
+    }
+
+    // =========================================================================
+    // Optimize: Reinhard color transfer (docs/ARCHITECTURE.md SS4.3)
+    // =========================================================================
+    ComputeResult CudaPipeline::ComputeLabStats(
+        const unsigned short* rgb, int width, int height, double outMean[3], double outStd[3])
+    {
+        if (!m_ctx->initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!rgb || !outMean || !outStd) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (width <= 0 || height <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+
+        int numPixels = width * height;
+        size_t rgbSize = static_cast<size_t>(numPixels) * 3 * sizeof(unsigned short);
+        size_t labSize = static_cast<size_t>(numPixels) * 3 * sizeof(float);
+
+        unsigned short* d_rgb = nullptr;
+        float* d_lab = nullptr;
+        double* d_sum = nullptr;
+        double* d_sumSq = nullptr;
+
+        CUDA_CHECK(cudaMalloc(&d_rgb, rgbSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_lab, labSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_sum, 3 * sizeof(double)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_sumSq, 3 * sizeof(double)), m_lastError);
+
+        CUDA_CHECK(cudaMemcpy(d_rgb, rgb, rgbSize, cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemset(d_sum, 0, 3 * sizeof(double)), m_lastError);
+        CUDA_CHECK(cudaMemset(d_sumSq, 0, 3 * sizeof(double)), m_lastError);
+
+        int threadsPerBlock = 256;
+        int blocks = (numPixels + threadsPerBlock - 1) / threadsPerBlock;
+
+        WindowsApp::Compute::Kernels::RgbToLabKernel<<<blocks, threadsPerBlock>>>(d_rgb, d_lab, numPixels);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+
+        WindowsApp::Compute::Kernels::LabStatsKernel<<<blocks, threadsPerBlock>>>(d_lab, numPixels, d_sum, d_sumSq);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
+
+        double sum[3];
+        double sumSq[3];
+        CUDA_CHECK(cudaMemcpy(sum, d_sum, 3 * sizeof(double), cudaMemcpyDeviceToHost), m_lastError);
+        CUDA_CHECK(cudaMemcpy(sumSq, d_sumSq, 3 * sizeof(double), cudaMemcpyDeviceToHost), m_lastError);
+
+        for (int c = 0; c < 3; ++c)
+        {
+            double mean = sum[c] / numPixels;
+            double variance = sumSq[c] / numPixels - mean * mean;
+            outMean[c] = mean;
+            outStd[c] = sqrt((variance > 0.0) ? variance : 0.0);
+        }
+
+        cudaFree(d_rgb);
+        cudaFree(d_lab);
+        cudaFree(d_sum);
+        cudaFree(d_sumSq);
+
+        return ComputeResult::SUCCESS;
+    }
+
+    ComputeResult CudaPipeline::ApplyReinhardColorTransfer(
+        unsigned short* rgbInOut, int width, int height,
+        const double srcMean[3], const double srcStd[3],
+        const double refMean[3], const double refStd[3])
+    {
+        if (!m_ctx->initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!rgbInOut || !srcMean || !srcStd || !refMean || !refStd) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (width <= 0 || height <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+
+        int numPixels = width * height;
+        size_t rgbSize = static_cast<size_t>(numPixels) * 3 * sizeof(unsigned short);
+        size_t labSize = static_cast<size_t>(numPixels) * 3 * sizeof(float);
+
+        unsigned short* d_rgb = nullptr;
+        float* d_lab = nullptr;
+        double* d_srcMean = nullptr;
+        double* d_srcStd = nullptr;
+        double* d_refMean = nullptr;
+        double* d_refStd = nullptr;
+
+        CUDA_CHECK(cudaMalloc(&d_rgb, rgbSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_lab, labSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_srcMean, 3 * sizeof(double)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_srcStd, 3 * sizeof(double)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_refMean, 3 * sizeof(double)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_refStd, 3 * sizeof(double)), m_lastError);
+
+        CUDA_CHECK(cudaMemcpy(d_rgb, rgbInOut, rgbSize, cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_srcMean, srcMean, 3 * sizeof(double), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_srcStd, srcStd, 3 * sizeof(double), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_refMean, refMean, 3 * sizeof(double), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_refStd, refStd, 3 * sizeof(double), cudaMemcpyHostToDevice), m_lastError);
+
+        int threadsPerBlock = 256;
+        int blocks = (numPixels + threadsPerBlock - 1) / threadsPerBlock;
+
+        WindowsApp::Compute::Kernels::RgbToLabKernel<<<blocks, threadsPerBlock>>>(d_rgb, d_lab, numPixels);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+
+        WindowsApp::Compute::Kernels::ReinhardTransferKernel<<<blocks, threadsPerBlock>>>(
+            d_lab, numPixels, d_srcMean, d_srcStd, d_refMean, d_refStd);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+
+        WindowsApp::Compute::Kernels::LabToRgbKernel<<<blocks, threadsPerBlock>>>(d_lab, d_rgb, numPixels);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
+
+        CUDA_CHECK(cudaMemcpy(rgbInOut, d_rgb, rgbSize, cudaMemcpyDeviceToHost), m_lastError);
+
+        cudaFree(d_rgb);
+        cudaFree(d_lab);
+        cudaFree(d_srcMean);
+        cudaFree(d_srcStd);
+        cudaFree(d_refMean);
+        cudaFree(d_refStd);
 
         return ComputeResult::SUCCESS;
     }
