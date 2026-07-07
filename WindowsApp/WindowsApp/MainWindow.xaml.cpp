@@ -25,19 +25,19 @@ namespace
     // Constraints in docs/superpowers/plans/2026-07-07-ui-progress-nonblocking.md).
     // Lives here, not WindowsApp.Tests, because the test-only
     // StubTaskExecutor must not be linked into the shipping UI binary.
-    class DemoStitchExecutor : public WindowsApp::Core::ITaskExecutor
+    class DemoStitchExecutor : public ::WindowsApp::Core::ITaskExecutor
     {
     public:
-        bool Execute(WindowsApp::Core::Task& /* task */, WindowsApp::Core::CancellationToken /* token */) override
+        bool Execute(::WindowsApp::Core::Task& /* task */, ::WindowsApp::Core::CancellationToken /* token */) override
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(400));
             return true;
         }
     };
 
-    winrt::hstring StageToDisplayString(WindowsApp::Core::PipelineStage stage)
+    winrt::hstring StageToDisplayString(::WindowsApp::Core::PipelineStage stage)
     {
-        using WindowsApp::Core::PipelineStage;
+        using ::WindowsApp::Core::PipelineStage;
         switch (stage)
         {
         case PipelineStage::IDLE:            return L"Idle.";
@@ -132,7 +132,8 @@ namespace winrt::WindowsApp::implementation
         Windows::Foundation::IInspectable const& /* sender */,
         RoutedEventArgs const& /* args */)
     {
-        using namespace WindowsApp::Core;
+        using ::WindowsApp::Core::PipelineStage;
+        using ::WindowsApp::Core::Task;
 
         StitchStartButton().IsEnabled(false);
         StitchCancelButton().IsEnabled(true);
@@ -188,7 +189,7 @@ namespace winrt::WindowsApp::implementation
         auto weakThis{ get_weak() };
 
         m_pipelineDriver.Initialize(
-            [weakThis, dispatcher](PipelineStage stage, float progress)
+            [weakThis, dispatcher](::WindowsApp::Core::PipelineStage stage, float progress)
             {
                 dispatcher.TryEnqueue([weakThis, stage, progress]
                 {

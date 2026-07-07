@@ -577,8 +577,14 @@ namespace WindowsApp::Core
             BlobDirectoryEntry entry;
             entry.blobId = sqlite3_column_int64(stmt, 0);
 
-            const wchar_t* shardFile = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 1));
-            if (shardFile) entry.shardFile = shardFile;
+            const char* shardFileUtf8 = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            if (shardFileUtf8)
+            {
+                int len = MultiByteToWideChar(CP_UTF8, 0, shardFileUtf8, -1, nullptr, 0);
+                std::wstring shardFile(len - 1, L'\0');
+                MultiByteToWideChar(CP_UTF8, 0, shardFileUtf8, -1, shardFile.data(), len);
+                entry.shardFile = shardFile;
+            }
 
             entry.offset = sqlite3_column_int64(stmt, 2);
             entry.length = sqlite3_column_int64(stmt, 3);
@@ -658,8 +664,14 @@ namespace WindowsApp::Core
                 else if (status == "COMPLETED") chunk.status = ChunkStatus::COMPLETED;
                 else if (status == "FAILED") chunk.status = ChunkStatus::FAILED;
 
-                const wchar_t* cachePath = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 6));
-                if (cachePath) chunk.cache_path = cachePath;
+                const char* cachePathUtf8 = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                if (cachePathUtf8)
+                {
+                    int len = MultiByteToWideChar(CP_UTF8, 0, cachePathUtf8, -1, nullptr, 0);
+                    std::wstring cachePath(len - 1, L'\0');
+                    MultiByteToWideChar(CP_UTF8, 0, cachePathUtf8, -1, cachePath.data(), len);
+                    chunk.cache_path = cachePath;
+                }
 
                 m_chunks.push_back(std::move(chunk));
             }
@@ -681,8 +693,14 @@ namespace WindowsApp::Core
                 InputImageModel img;
                 img.id = sqlite3_column_int(stmt, 0);
 
-                const wchar_t* path = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 1));
-                if (path) img.file_path = path;
+                const char* pathUtf8 = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (pathUtf8)
+                {
+                    int len = MultiByteToWideChar(CP_UTF8, 0, pathUtf8, -1, nullptr, 0);
+                    std::wstring path(len - 1, L'\0');
+                    MultiByteToWideChar(CP_UTF8, 0, pathUtf8, -1, path.data(), len);
+                    img.file_path = path;
+                }
 
                 img.homography.h[0] = static_cast<float>(sqlite3_column_double(stmt, 2));
                 img.homography.h[1] = static_cast<float>(sqlite3_column_double(stmt, 3));

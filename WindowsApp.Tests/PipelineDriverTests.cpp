@@ -1,6 +1,6 @@
 #include "CppUnitTest.h"
-#include "HeaderFiles/PipelineDriver.h"
-#include "HeaderFiles/ProjectManager.h"
+#include "PipelineDriver.h"
+#include "ProjectManager.h"
 #include "StubTaskExecutor.h"
 #include <Windows.h>
 #include <atomic>
