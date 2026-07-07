@@ -48,6 +48,13 @@ namespace WindowsApp { namespace Compute
 
     using BriefDescriptor = uint64_t[4]; // 256-bit binary descriptor
 
+    struct MatchResult
+    {
+        int indexA = 0;
+        int indexB = 0;
+        int hammingDistance = 0;
+    };
+
     // Forward declaration for internal CUDA state
     struct CudaContext;
 
@@ -140,6 +147,18 @@ namespace WindowsApp { namespace Compute
         ComputeResult DetectAndDescribeFeatures(
             const unsigned char* rgbImage, int width, int height,
             FeaturePoint* outPoints, BriefDescriptor* outDescriptors, int* outCount, int maxPoints);
+
+        // =====================================================================
+        // Align: Brute-force descriptor matching (docs/ARCHITECTURE.md SS4.2)
+        // =====================================================================
+        // One thread per descriptor in A finds its best/second-best match
+        // in B (Hamming distance); accepts via Lowe's ratio test. Returns
+        // at most maxMatches results in outMatches.
+        ComputeResult MatchFeatures(
+            const BriefDescriptor* descA, int countA,
+            const BriefDescriptor* descB, int countB,
+            MatchResult* outMatches, int* outMatchCount, int maxMatches,
+            float ratioThreshold = 0.75f);
 
         // =====================================================================
         // Tensor Core Operations (requires SM 7.0+)

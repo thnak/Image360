@@ -1,6 +1,7 @@
 #include "HeaderFiles/features.cuh"
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <climits>
 
 namespace WindowsApp
 {
@@ -145,6 +146,58 @@ namespace WindowsApp
                 outDescriptors[idx][1] = bits[1];
                 outDescriptors[idx][2] = bits[2];
                 outDescriptors[idx][3] = bits[3];
+            }
+
+            __device__ __forceinline__ int HammingDistance256(const BriefDescriptor& a, const BriefDescriptor& b)
+            {
+                return __popcll(a[0] ^ b[0]) + __popcll(a[1] ^ b[1])
+                     + __popcll(a[2] ^ b[2]) + __popcll(a[3] ^ b[3]);
+            }
+
+            __global__ void BruteForceMatchKernel(
+                const BriefDescriptor* __restrict__ descA, int countA,
+                const BriefDescriptor* __restrict__ descB, int countB,
+                MatchResult* __restrict__ outMatches, int* __restrict__ outMatchCount, int maxMatches,
+                float ratioThreshold)
+            {
+                int i = blockIdx.x * blockDim.x + threadIdx.x;
+                if (i >= countA)
+                    return;
+
+                int best = INT_MAX;
+                int second = INT_MAX;
+                int bestIdx = -1;
+
+                for (int j = 0; j < countB; ++j)
+                {
+                    int dist = HammingDistance256(descA[i], descB[j]);
+                    if (dist < best)
+                    {
+                        second = best;
+                        best = dist;
+                        bestIdx = j;
+                    }
+                    else if (dist < second)
+                    {
+                        second = dist;
+                    }
+                }
+
+                if (bestIdx < 0)
+                    return;
+
+                bool accept = (second == INT_MAX)
+                    || (static_cast<float>(best) < ratioThreshold * static_cast<float>(second));
+                if (!accept)
+                    return;
+
+                int idx = atomicAdd(outMatchCount, 1);
+                if (idx < maxMatches)
+                {
+                    outMatches[idx].indexA = i;
+                    outMatches[idx].indexB = bestIdx;
+                    outMatches[idx].hammingDistance = best;
+                }
             }
         }
     }

@@ -636,6 +636,59 @@ namespace WindowsApp { namespace Compute
         return ComputeResult::SUCCESS;
     }
 
+    // =========================================================================
+    // Align: Brute-force descriptor matching (docs/ARCHITECTURE.md SS4.2)
+    // =========================================================================
+    ComputeResult CudaPipeline::MatchFeatures(
+        const BriefDescriptor* descA, int countA,
+        const BriefDescriptor* descB, int countB,
+        MatchResult* outMatches, int* outMatchCount, int maxMatches,
+        float ratioThreshold)
+    {
+        if (!m_ctx->initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!descA || !descB || !outMatches || !outMatchCount) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (countA <= 0 || countB <= 0 || maxMatches <= 0) { SetError("Invalid counts."); return ComputeResult::INVALID_PARAM; }
+
+        BriefDescriptor* d_descA = nullptr;
+        BriefDescriptor* d_descB = nullptr;
+        MatchResult* d_matches = nullptr;
+        int* d_matchCount = nullptr;
+
+        CUDA_CHECK(cudaMalloc(&d_descA, static_cast<size_t>(countA) * sizeof(BriefDescriptor)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_descB, static_cast<size_t>(countB) * sizeof(BriefDescriptor)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_matches, static_cast<size_t>(maxMatches) * sizeof(MatchResult)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_matchCount, sizeof(int)), m_lastError);
+
+        CUDA_CHECK(cudaMemcpy(d_descA, descA, static_cast<size_t>(countA) * sizeof(BriefDescriptor), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_descB, descB, static_cast<size_t>(countB) * sizeof(BriefDescriptor), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemset(d_matchCount, 0, sizeof(int)), m_lastError);
+
+        int threadsPerBlock = 256;
+        int blocks = (countA + threadsPerBlock - 1) / threadsPerBlock;
+
+        WindowsApp::Compute::Kernels::BruteForceMatchKernel<<<blocks, threadsPerBlock>>>(
+            d_descA, countA, d_descB, countB, d_matches, d_matchCount, maxMatches, ratioThreshold);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
+
+        int rawCount = 0;
+        CUDA_CHECK(cudaMemcpy(&rawCount, d_matchCount, sizeof(int), cudaMemcpyDeviceToHost), m_lastError);
+        int clampedCount = std::min(rawCount, maxMatches);
+
+        if (clampedCount > 0)
+        {
+            CUDA_CHECK(cudaMemcpy(outMatches, d_matches, static_cast<size_t>(clampedCount) * sizeof(MatchResult), cudaMemcpyDeviceToHost), m_lastError);
+        }
+        *outMatchCount = clampedCount;
+
+        cudaFree(d_descA);
+        cudaFree(d_descB);
+        cudaFree(d_matches);
+        cudaFree(d_matchCount);
+
+        return ComputeResult::SUCCESS;
+    }
+
     const char* CudaPipeline::GetLastError() const
     {
         return m_lastError;

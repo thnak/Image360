@@ -38,4 +38,16 @@ namespace WindowsApp { namespace Compute { namespace Kernels
         const unsigned char* __restrict__ grayImage, int width, int height,
         const FeaturePoint* __restrict__ points, int numPoints,
         BriefDescriptor* __restrict__ outDescriptors);
+
+    // =====================================================================
+    // Brute-force descriptor matching (Hamming distance + ratio test)
+    // =====================================================================
+    // One thread per descriptor in A: finds best/second-best match in B,
+    // accepts via Lowe's ratio test (best/second < ratioThreshold),
+    // atomically appends to outMatches (capped at maxMatches).
+    __global__ void BruteForceMatchKernel(
+        const BriefDescriptor* __restrict__ descA, int countA,
+        const BriefDescriptor* __restrict__ descB, int countB,
+        MatchResult* __restrict__ outMatches, int* __restrict__ outMatchCount, int maxMatches,
+        float ratioThreshold);
 }}}
