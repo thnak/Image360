@@ -37,6 +37,20 @@ namespace WindowsApp::Core
             PipelineStage stage = kStageOrder[i];
             m_currentStage.store(stage);
 
+            if (stage == PipelineStage::STAGE3_RENDER)
+            {
+                // Render's chunk_contributors depend on Optimize's final
+                // homographies, so its task list can't be seeded upfront
+                // like Ingest/Align/Optimize's (whose task lists only
+                // depend on the stable input-image set). Safe/idempotent
+                // whether Optimize just ran in this call or was already
+                // COMPLETED from a prior session (resume case) -
+                // SeedRenderTasks recomputes overlap culling and re-runs
+                // SetChunkContributors/CreateTasksIfAbsent, both already
+                // idempotent.
+                projectManager.SeedRenderTasks();
+            }
+
             std::vector<Task> tasks = projectManager.GetTasksForStage(stage);
             bool alreadyComplete = !tasks.empty() &&
                 std::all_of(tasks.begin(), tasks.end(),
