@@ -79,6 +79,7 @@
     <ClCompile Include="RansacHomographyTests.cpp" />
     <ClCompile Include="BundleAdjustmentTests.cpp" />
     <ClCompile Include="OverlapCullingTests.cpp" />
+    <ClCompile Include="PanoramaExporterTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\WindowsApp.Core\WindowsApp.Core.vcxproj">

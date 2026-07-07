@@ -82,6 +82,7 @@
     <ClInclude Include="HeaderFiles\BundleAdjustment.h" />
     <ClInclude Include="HeaderFiles\OverlapCulling.h" />
     <ClInclude Include="HeaderFiles\RenderExecutor.h" />
+    <ClInclude Include="HeaderFiles\PanoramaExporter.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
   </ItemGroup>
@@ -123,6 +124,9 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="SourceFiles\RenderExecutor.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\PanoramaExporter.cpp">
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="sqlite3\sqlite3.c">
