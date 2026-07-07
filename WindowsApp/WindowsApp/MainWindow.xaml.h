@@ -35,6 +35,10 @@ namespace winrt::WindowsApp::implementation
             winrt::Windows::Foundation::IInspectable const& sender,
             winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
 
+        winrt::fire_and_forget StitchExportButton_Click(
+            winrt::Windows::Foundation::IInspectable const& sender,
+            winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
+
     private:
         // Declared in this order - not the stop_source/jthread/Project/
         // Driver order the plan doc sketches - because member destruction
@@ -52,6 +56,10 @@ namespace winrt::WindowsApp::implementation
         bool m_computeInitialized = false;
         std::stop_source m_stitchStopSource;
         std::jthread m_stitchThread;
+        // Declared last for the same reverse-destruction-order reason as
+        // m_stitchThread - joined (via std::jthread's destructor) before
+        // any member it might still be using during MainWindow teardown.
+        std::jthread m_exportThread;
     };
 }
 

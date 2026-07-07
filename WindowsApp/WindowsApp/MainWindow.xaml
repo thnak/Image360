@@ -268,6 +268,11 @@
                                         Click="StitchCancelButton_Click"
                                         HorizontalAlignment="Stretch" />
                             </Grid>
+                            <Button x:Name="StitchExportButton"
+                                    Content="Export Preview JPEG"
+                                    IsEnabled="False"
+                                    Click="StitchExportButton_Click"
+                                    HorizontalAlignment="Stretch" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

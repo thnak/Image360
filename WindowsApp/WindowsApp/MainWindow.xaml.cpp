@@ -5,6 +5,7 @@
 #endif
 
 #include "ImageLoader.h"
+#include "PanoramaExporter.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -374,6 +375,7 @@ namespace winrt::WindowsApp::implementation
                 {
                     strongThis->StitchStartButton().IsEnabled(true);
                     strongThis->StitchCancelButton().IsEnabled(false);
+                    strongThis->StitchExportButton().IsEnabled(ok);
                     strongThis->StitchStatusText().Text(
                         ok ? L"Stitch completed." : (wasCancelled ? L"Stitch cancelled." : L"Stitch failed."));
                     if (ok)
@@ -395,5 +397,52 @@ namespace winrt::WindowsApp::implementation
         // re-enables Start.
         m_stitchStopSource.request_stop();
         StitchStatusText().Text(L"Cancelling - finishing in-flight work...");
+    }
+
+    winrt::fire_and_forget MainWindow::StitchExportButton_Click(
+        Windows::Foundation::IInspectable const& /* sender */,
+        RoutedEventArgs const& /* args */)
+    {
+        auto lifetime{ get_strong() }; // keep `this` alive across co_await suspension
+
+        if (m_exportThread.joinable())
+        {
+            m_exportThread.join();
+        }
+
+        FileSavePicker picker{ AppWindow().Id() };
+        picker.SuggestedFileName(L"panorama_preview");
+        picker.FileTypeChoices().Insert(L"JPEG image", winrt::single_threaded_vector<winrt::hstring>({ L".jpg" }));
+
+        auto destFile{ co_await picker.PickSaveFileAsync() };
+        if (!destFile)
+        {
+            StitchStatusText().Text(L"Export cancelled.");
+            co_return;
+        }
+
+        std::wstring destPath(destFile.Path().c_str());
+
+        StitchExportButton().IsEnabled(false);
+        StitchStatusText().Text(L"Exporting preview JPEG...");
+
+        auto weakThis{ get_weak() }; // same reasoning as StitchStartButton_Click - see that method's comment
+        auto dispatcher = DispatcherQueue();
+
+        m_exportThread = std::jthread([this, weakThis, dispatcher, destPath]()
+        {
+            ::WindowsApp::Core::PanoramaExporter exporter(m_stitchProject, m_stitchStorage, m_nvJpegCodec);
+            bool ok = exporter.ExportPreviewJpeg(destPath, 4096);
+
+            dispatcher.TryEnqueue([weakThis, ok]
+            {
+                if (auto strongThis{ weakThis.get() })
+                {
+                    strongThis->StitchExportButton().IsEnabled(true);
+                    strongThis->StitchStatusText().Text(
+                        ok ? L"Preview JPEG exported." : L"Preview export failed.");
+                }
+            });
+        });
     }
 }
