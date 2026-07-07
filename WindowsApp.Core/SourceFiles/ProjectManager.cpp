@@ -417,6 +417,36 @@ namespace WindowsApp::Core
         return CreateTasksIfAbsent(seeds);
     }
 
+    bool ProjectManager::SeedOptimizeTasks()
+    {
+        if (!m_db) return false;
+
+        std::vector<Task> seeds;
+        seeds.reserve(m_inputImages.size() * 2 + 1);
+        for (const auto& image : m_inputImages)
+        {
+            Task gainTask;
+            gainTask.stage = PipelineStage::STAGE2_OPTIMIZE;
+            gainTask.unitKind = "gain";
+            gainTask.unitKey = std::to_string(image.id);
+            seeds.push_back(std::move(gainTask));
+
+            Task colorTask;
+            colorTask.stage = PipelineStage::STAGE2_OPTIMIZE;
+            colorTask.unitKind = "color";
+            colorTask.unitKey = std::to_string(image.id);
+            seeds.push_back(std::move(colorTask));
+        }
+
+        Task baTask;
+        baTask.stage = PipelineStage::STAGE2_OPTIMIZE;
+        baTask.unitKind = "ba_checkpoint";
+        baTask.unitKey = "global";
+        seeds.push_back(std::move(baTask));
+
+        return CreateTasksIfAbsent(seeds);
+    }
+
     bool ProjectManager::UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath)
     {
         if (!m_db) return false;

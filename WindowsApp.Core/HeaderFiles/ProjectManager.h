@@ -51,6 +51,11 @@ namespace WindowsApp::Core
         // docs/superpowers/plans/2026-07-07-align-stage.md's Global
         // Constraints.
         bool SeedAlignTasks();
+
+        // One STAGE2_OPTIMIZE/"gain" + one STAGE2_OPTIMIZE/"color" task
+        // per input image, exactly one STAGE2_OPTIMIZE/"ba_checkpoint"
+        // task (unit_key = "global").
+        bool SeedOptimizeTasks();
         bool UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath);
 
         // Tasks
