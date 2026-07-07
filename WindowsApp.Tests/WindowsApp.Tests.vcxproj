@@ -78,6 +78,7 @@
     <ClCompile Include="ImageLoaderUnpackRawTests.cpp" />
     <ClCompile Include="RansacHomographyTests.cpp" />
     <ClCompile Include="BundleAdjustmentTests.cpp" />
+    <ClCompile Include="OverlapCullingTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\WindowsApp.Core\WindowsApp.Core.vcxproj">
