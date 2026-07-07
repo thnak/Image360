@@ -16,6 +16,17 @@ namespace WindowsApp::Core
         FAILED
     };
 
+    // Routes RawIngest to the GPU demosaic path (BAYER) or LibRaw's own
+    // CPU dcraw_process() (X_TRANS, FOVEON - a deliberate, documented
+    // exception per docs/ARCHITECTURE.md SS4.1, not a gap to close).
+    enum class CfaType
+    {
+        BAYER,
+        X_TRANS,
+        FOVEON,
+        UNKNOWN
+    };
+
     enum class PipelineStage
     {
         IDLE,

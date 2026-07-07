@@ -16,6 +16,7 @@ namespace WindowsApp::Core
         std::wstring file_path;
         Homography homography;
         float gain = 1.0f;
+        CfaType cfaType = CfaType::UNKNOWN;
     };
 
     class ProjectManager
@@ -29,7 +30,7 @@ namespace WindowsApp::Core
         bool LoadProject(const std::wstring& dbPath);
         void CloseProject();
 
-        bool AddInputImage(const std::wstring& filePath, const Homography& h);
+        bool AddInputImage(const std::wstring& filePath, const Homography& h, CfaType cfaType = CfaType::BAYER);
         bool UpdateImageGain(int imageId, float gain);
         bool UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath);
 

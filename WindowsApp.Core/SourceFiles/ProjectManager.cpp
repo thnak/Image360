@@ -56,6 +56,26 @@ namespace WindowsApp::Core
             if (s == "CANCELLED") return TaskStatus::CANCELLED;
             return TaskStatus::PENDING;
         }
+
+        const char* ToString(CfaType cfaType)
+        {
+            switch (cfaType)
+            {
+            case CfaType::BAYER:   return "BAYER";
+            case CfaType::X_TRANS: return "X_TRANS";
+            case CfaType::FOVEON:  return "FOVEON";
+            case CfaType::UNKNOWN: return "UNKNOWN";
+            }
+            return "UNKNOWN";
+        }
+
+        CfaType ParseCfaType(const std::string& s)
+        {
+            if (s == "BAYER")   return CfaType::BAYER;
+            if (s == "X_TRANS") return CfaType::X_TRANS;
+            if (s == "FOVEON")  return CfaType::FOVEON;
+            return CfaType::UNKNOWN;
+        }
     }
 
     ProjectManager::ProjectManager() = default;
@@ -98,7 +118,8 @@ namespace WindowsApp::Core
                 h00 REAL DEFAULT 1.0, h01 REAL DEFAULT 0.0, h02 REAL DEFAULT 0.0,
                 h10 REAL DEFAULT 0.0, h11 REAL DEFAULT 1.0, h12 REAL DEFAULT 0.0,
                 h20 REAL DEFAULT 0.0, h21 REAL DEFAULT 0.0, h22 REAL DEFAULT 1.0,
-                gain REAL DEFAULT 1.0
+                gain REAL DEFAULT 1.0,
+                cfa_type TEXT DEFAULT 'BAYER'
             );
 
             CREATE TABLE IF NOT EXISTS chunks (
@@ -240,6 +261,12 @@ namespace WindowsApp::Core
         )";
         ExecuteNonQuery(taskSchema);
 
+        // ALTER TABLE ADD COLUMN fails if the column already exists (a
+        // project created after cfa_type was added to the schema above) -
+        // that failure just means "already migrated," not an error, so
+        // its return value is intentionally ignored here.
+        ExecuteNonQuery("ALTER TABLE input_images ADD COLUMN cfa_type TEXT DEFAULT 'BAYER';");
+
         LoadMetadata();
         LoadInputImages();
         LoadChunks();
@@ -261,7 +288,7 @@ namespace WindowsApp::Core
         m_inputImages.clear();
     }
 
-    bool ProjectManager::AddInputImage(const std::wstring& filePath, const Homography& h)
+    bool ProjectManager::AddInputImage(const std::wstring& filePath, const Homography& h, CfaType cfaType)
     {
         if (!m_db) return false;
 
@@ -271,12 +298,13 @@ namespace WindowsApp::Core
 
         char sql[1024];
         snprintf(sql, sizeof(sql),
-            "INSERT INTO input_images (file_path, h00, h01, h02, h10, h11, h12, h20, h21, h22) "
-            "VALUES ('%s', %f, %f, %f, %f, %f, %f, %f, %f, %f);",
+            "INSERT INTO input_images (file_path, h00, h01, h02, h10, h11, h12, h20, h21, h22, cfa_type) "
+            "VALUES ('%s', %f, %f, %f, %f, %f, %f, %f, %f, %f, '%s');",
             utf8Path.c_str(),
             h.h[0], h.h[1], h.h[2],
             h.h[3], h.h[4], h.h[5],
-            h.h[6], h.h[7], h.h[8]);
+            h.h[6], h.h[7], h.h[8],
+            ToString(cfaType));
 
         if (!ExecuteNonQuery(sql)) return false;
 
@@ -685,7 +713,7 @@ namespace WindowsApp::Core
         if (!m_db) return;
 
         sqlite3_stmt* stmt = nullptr;
-        const char* sql = "SELECT id, file_path, h00, h01, h02, h10, h11, h12, h20, h21, h22, gain FROM input_images ORDER BY id;";
+        const char* sql = "SELECT id, file_path, h00, h01, h02, h10, h11, h12, h20, h21, h22, gain, cfa_type FROM input_images ORDER BY id;";
         if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK)
         {
             while (sqlite3_step(stmt) == SQLITE_ROW)
@@ -713,6 +741,9 @@ namespace WindowsApp::Core
                 img.homography.h[8] = static_cast<float>(sqlite3_column_double(stmt, 10));
 
                 img.gain = static_cast<float>(sqlite3_column_double(stmt, 11));
+
+                if (const char* cfaTypeUtf8 = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 12)))
+                    img.cfaType = ParseCfaType(cfaTypeUtf8);
 
                 m_inputImages.push_back(std::move(img));
             }
