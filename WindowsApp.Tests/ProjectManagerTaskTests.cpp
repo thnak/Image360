@@ -127,5 +127,27 @@ namespace WindowsApp::Tests
             pm.CloseProject();
             DeleteFileW(path.c_str());
         }
+
+        TEST_METHOD(SeedIngestTasksIsIdempotent)
+        {
+            using namespace WindowsApp::Core;
+            std::wstring path = MakeTempProjectPath(L"seedingest");
+            ProjectManager pm;
+            Assert::IsTrue(pm.CreateProject(path, 8192, 8192));
+
+            Assert::IsTrue(pm.AddInputImage(L"C:\\fake\\img1.dng", Homography{}, CfaType::BAYER));
+            Assert::IsTrue(pm.AddInputImage(L"C:\\fake\\img2.dng", Homography{}, CfaType::BAYER));
+            Assert::IsTrue(pm.AddInputImage(L"C:\\fake\\img3.dng", Homography{}, CfaType::BAYER));
+
+            Assert::IsTrue(pm.SeedIngestTasks());
+            Assert::AreEqual(size_t(3), pm.GetTasksForStage(PipelineStage::STAGE0_INGEST).size());
+
+            // Re-seeding with no new images must not duplicate rows.
+            Assert::IsTrue(pm.SeedIngestTasks());
+            Assert::AreEqual(size_t(3), pm.GetTasksForStage(PipelineStage::STAGE0_INGEST).size());
+
+            pm.CloseProject();
+            DeleteFileW(path.c_str());
+        }
     };
 }

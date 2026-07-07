@@ -32,6 +32,12 @@ namespace WindowsApp::Core
 
         bool AddInputImage(const std::wstring& filePath, const Homography& h, CfaType cfaType = CfaType::BAYER);
         bool UpdateImageGain(int imageId, float gain);
+
+        // Creates one PipelineStage::STAGE0_INGEST / unit_kind="image"
+        // task per input image row that doesn't already have one.
+        // Idempotent via CreateTasksIfAbsent's UNIQUE(stage, unit_kind,
+        // unit_key) constraint.
+        bool SeedIngestTasks();
         bool UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath);
 
         // Tasks

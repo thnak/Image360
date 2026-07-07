@@ -335,6 +335,24 @@ namespace WindowsApp::Core
         return true;
     }
 
+    bool ProjectManager::SeedIngestTasks()
+    {
+        if (!m_db) return false;
+
+        std::vector<Task> seeds;
+        seeds.reserve(m_inputImages.size());
+        for (const auto& image : m_inputImages)
+        {
+            Task task;
+            task.stage = PipelineStage::STAGE0_INGEST;
+            task.unitKind = "image";
+            task.unitKey = std::to_string(image.id);
+            seeds.push_back(std::move(task));
+        }
+
+        return CreateTasksIfAbsent(seeds);
+    }
+
     bool ProjectManager::UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath)
     {
         if (!m_db) return false;
