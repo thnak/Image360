@@ -7,6 +7,7 @@
 #include "ImageLoader.h"
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -22,33 +23,6 @@ using namespace Windows::Storage;
 
 namespace
 {
-    // Deliberately minimal stand-in for real GPU work - RawIngest/Align/
-    // Optimize/Render executors don't exist yet (see this plan's Global
-    // Constraints in docs/superpowers/plans/2026-07-07-ui-progress-nonblocking.md).
-    // Lives here, not WindowsApp.Tests, because the test-only
-    // StubTaskExecutor must not be linked into the shipping UI binary.
-    class DemoStitchExecutor : public ::WindowsApp::Core::ITaskExecutor
-    {
-    public:
-        explicit DemoStitchExecutor(std::chrono::milliseconds duration) : m_duration(duration) {}
-
-        bool Execute(::WindowsApp::Core::Task& /* task */, ::WindowsApp::Core::CancellationToken /* token */) override
-        {
-            std::this_thread::sleep_for(m_duration);
-            return true;
-        }
-
-    private:
-        std::chrono::milliseconds m_duration;
-    };
-
-    // kMaxInFlight (TaskScheduler.h) is 4, so this many tasks at this
-    // duration take ~kDemoTaskCount / 4 * kDemoTaskDuration wall-clock -
-    // long enough to actually see the progress bar move and to click
-    // Cancel mid-run, unlike a handful of near-instant tasks.
-    constexpr int kDemoTaskCount = 40;
-    constexpr std::chrono::milliseconds kDemoTaskDuration{ 500 };
-
     winrt::hstring StageToDisplayString(::WindowsApp::Core::PipelineStage stage)
     {
         using ::WindowsApp::Core::PipelineStage;
@@ -191,6 +165,37 @@ namespace winrt::WindowsApp::implementation
             m_stitchThread.join();
         }
 
+        // Lazily initialize the engine objects once per session (not per
+        // run) - avoids paying CUDA init cost if the user never clicks
+        // Start Stitch, and this is the first place in the shipping UI a
+        // missing/incompatible GPU becomes a real, user-visible failure
+        // mode rather than a demo that never touched CUDA at all.
+        if (!m_computeInitialized)
+        {
+            m_cudaPipeline = std::make_shared<::WindowsApp::Compute::CudaPipeline>();
+            if (m_cudaPipeline->Initialize() != ::WindowsApp::Compute::ComputeResult::SUCCESS)
+            {
+                const char* errorMsg = m_cudaPipeline->GetLastError();
+                std::wstring wideError(errorMsg, errorMsg + strlen(errorMsg)); // ASCII-only error text
+
+                StitchStartButton().IsEnabled(true);
+                StitchCancelButton().IsEnabled(false);
+                StitchStatusText().Text(winrt::hstring{ L"No compatible GPU found: " } + winrt::hstring{ wideError });
+                co_return;
+            }
+
+            m_nvJpegCodec = std::make_shared<::WindowsApp::Compute::NvJpegCodec>();
+            if (m_nvJpegCodec->Initialize() != ::WindowsApp::Compute::ComputeResult::SUCCESS)
+            {
+                StitchStartButton().IsEnabled(true);
+                StitchCancelButton().IsEnabled(false);
+                StitchStatusText().Text(L"Failed to initialize the JPEG codec.");
+                co_return;
+            }
+
+            m_computeInitialized = true;
+        }
+
         FileOpenPicker picker{ AppWindow().Id() };
         picker.FileTypeFilter().Append(L".raf");
         picker.FileTypeFilter().Append(L".cr2");
@@ -280,10 +285,22 @@ namespace winrt::WindowsApp::implementation
         std::wstring projectPath = StitchProjectPath();
 
         m_stitchProject.CloseProject(); // release any handle from a prior click before deleting the file
+        m_stitchStorage.Close();
         DeleteFileW(projectPath.c_str());
         DeleteFileW((projectPath + L"-wal").c_str());
         DeleteFileW((projectPath + L"-shm").c_str());
         m_stitchProject.CreateProject(projectPath, totalWidth, totalHeight);
+
+        {
+            size_t lastSlash = projectPath.find_last_of(L'\\');
+            size_t lastDot = projectPath.find_last_of(L'.');
+            std::wstring projectDirectory = (lastSlash == std::wstring::npos) ? L"." : projectPath.substr(0, lastSlash);
+            size_t nameStart = (lastSlash == std::wstring::npos) ? 0 : lastSlash + 1;
+            size_t nameLength = (lastDot == std::wstring::npos || lastDot < nameStart) ? std::wstring::npos : lastDot - nameStart;
+            std::wstring projectBaseName = projectPath.substr(nameStart, nameLength);
+
+            m_stitchStorage.Open(projectDirectory, projectBaseName, m_stitchProject);
+        }
 
         for (const auto& img : pickedImages)
         {
@@ -296,6 +313,15 @@ namespace winrt::WindowsApp::implementation
         // STAGE3_RENDER is deliberately not seeded here - it needs
         // Optimize's final homographies; PipelineDriver::Run seeds it
         // right before the Render stage (issue #42).
+
+        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE0_INGEST,
+            std::make_shared<::WindowsApp::Core::RawIngestExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline));
+        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE1_ALIGN,
+            std::make_shared<::WindowsApp::Core::AlignExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline, m_nvJpegCodec));
+        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE2_OPTIMIZE,
+            std::make_shared<::WindowsApp::Core::OptimizeExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline, m_nvJpegCodec));
+        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE3_RENDER,
+            std::make_shared<::WindowsApp::Core::RenderExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline));
 
         StitchStatusText().Text(L"Starting stitch...");
 

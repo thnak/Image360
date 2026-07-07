@@ -45,7 +45,11 @@ namespace winrt::WindowsApp::implementation
         // objects during MainWindow teardown. This is what makes
         // window-close-mid-run safe with no extra shutdown handler.
         ::WindowsApp::Core::ProjectManager m_stitchProject;
+        ::WindowsApp::Core::StorageEngine m_stitchStorage;
         ::WindowsApp::Core::PipelineDriver m_pipelineDriver;
+        std::shared_ptr<::WindowsApp::Compute::CudaPipeline> m_cudaPipeline;
+        std::shared_ptr<::WindowsApp::Compute::NvJpegCodec> m_nvJpegCodec;
+        bool m_computeInitialized = false;
         std::stop_source m_stitchStopSource;
         std::jthread m_stitchThread;
     };
