@@ -177,5 +177,39 @@ namespace WindowsApp::Tests
             pm.CloseProject();
             CleanupDir(dir);
         }
+
+        TEST_METHOD(PixelBufferRoundTrip)
+        {
+            using namespace WindowsApp::Core;
+
+            std::wstring dir = MakeTempProjectDir(L"pixelbuffer");
+            std::wstring vfpPath = dir + L"\\project.vfp";
+            ProjectManager pm;
+            Assert::IsTrue(pm.CreateProject(vfpPath, 1024, 1024));
+
+            StorageEngine storage;
+            Assert::IsTrue(storage.Open(dir, L"project", pm));
+
+            PixelBuffer original;
+            original.width = 4;
+            original.height = 3;
+            original.data.resize(static_cast<size_t>(original.width) * original.height);
+            for (size_t i = 0; i < original.data.size(); ++i)
+                original.data[i] = static_cast<unsigned short>(i * 111);
+
+            auto blobId = storage.WritePixelBuffer(original, "test_pixels");
+            Assert::IsTrue(blobId.has_value());
+
+            auto readBack = storage.ReadPixelBuffer(blobId.value());
+            Assert::IsTrue(readBack.has_value());
+            Assert::AreEqual(original.width, readBack->width);
+            Assert::AreEqual(original.height, readBack->height);
+            Assert::AreEqual(original.data.size(), readBack->data.size());
+            Assert::IsTrue(std::equal(original.data.begin(), original.data.end(), readBack->data.begin()));
+
+            storage.Close();
+            pm.CloseProject();
+            CleanupDir(dir);
+        }
     };
 }

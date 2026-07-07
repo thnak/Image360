@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "HeaderFiles/StorageEngine.h"
 #include <algorithm>
+#include <cstring>
 
 namespace WindowsApp::Core
 {
@@ -178,5 +179,45 @@ namespace WindowsApp::Core
 
         CloseHandle(handle);
         return buffer;
+    }
+
+    std::optional<int64_t> StorageEngine::WritePixelBuffer(const PixelBuffer& buffer, const std::string& formatTag)
+    {
+        int32_t width = static_cast<int32_t>(buffer.width);
+        int32_t height = static_cast<int32_t>(buffer.height);
+        size_t pixelBytes = buffer.data.size() * sizeof(unsigned short);
+        size_t totalBytes = sizeof(width) + sizeof(height) + pixelBytes;
+
+        std::vector<uint8_t> framed(totalBytes);
+        std::memcpy(framed.data(), &width, sizeof(width));
+        std::memcpy(framed.data() + sizeof(width), &height, sizeof(height));
+        if (pixelBytes > 0)
+            std::memcpy(framed.data() + sizeof(width) + sizeof(height), buffer.data.data(), pixelBytes);
+
+        return WriteBlob(framed.data(), framed.size(), formatTag);
+    }
+
+    std::optional<PixelBuffer> StorageEngine::ReadPixelBuffer(int64_t blobId)
+    {
+        auto bytes = ReadBlob(blobId);
+        if (!bytes.has_value() || bytes->size() < sizeof(int32_t) * 2) return std::nullopt;
+
+        int32_t width = 0;
+        int32_t height = 0;
+        std::memcpy(&width, bytes->data(), sizeof(width));
+        std::memcpy(&height, bytes->data() + sizeof(width), sizeof(height));
+
+        size_t headerSize = sizeof(width) + sizeof(height);
+        size_t pixelBytes = bytes->size() - headerSize;
+        if (pixelBytes % sizeof(unsigned short) != 0) return std::nullopt;
+
+        PixelBuffer result;
+        result.width = width;
+        result.height = height;
+        result.data.resize(pixelBytes / sizeof(unsigned short));
+        if (pixelBytes > 0)
+            std::memcpy(result.data.data(), bytes->data() + headerSize, pixelBytes);
+
+        return result;
     }
 }

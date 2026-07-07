@@ -54,6 +54,16 @@ namespace WindowsApp::Core
         // byte range.
         std::optional<std::vector<uint8_t>> ReadBlob(int64_t blobId);
 
+        // Convenience wrappers for the common case of storing a decoded/
+        // rendered image. Framing: a fixed 8-byte header (int32 width,
+        // int32 height) immediately followed by the raw pixel data
+        // (matches PixelBuffer::data's layout) - blob_directory itself
+        // has no width/height columns, so the dimensions travel inside
+        // the blob payload instead of widening that table for one
+        // consumer.
+        std::optional<int64_t> WritePixelBuffer(const PixelBuffer& buffer, const std::string& formatTag);
+        std::optional<PixelBuffer> ReadPixelBuffer(int64_t blobId);
+
     private:
         ProjectManager* m_projectManager = nullptr;
         std::wstring m_projectDirectory;
