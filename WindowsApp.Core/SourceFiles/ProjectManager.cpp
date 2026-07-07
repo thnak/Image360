@@ -335,6 +335,40 @@ namespace WindowsApp::Core
         return true;
     }
 
+    bool ProjectManager::UpdateHomography(int imageId, const Homography& h)
+    {
+        if (!m_db) return false;
+
+        const char* sql =
+            "UPDATE input_images SET h00=?, h01=?, h02=?, h10=?, h11=?, h12=?, h20=?, h21=?, h22=? WHERE id=?;";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+        for (int i = 0; i < 9; ++i)
+        {
+            sqlite3_bind_double(stmt, i + 1, static_cast<double>(h.h[i]));
+        }
+        sqlite3_bind_int(stmt, 10, imageId);
+
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+
+        if (ok)
+        {
+            for (auto& img : m_inputImages)
+            {
+                if (img.id == imageId)
+                {
+                    img.homography = h;
+                    break;
+                }
+            }
+        }
+
+        return ok;
+    }
+
     bool ProjectManager::SeedIngestTasks()
     {
         if (!m_db) return false;

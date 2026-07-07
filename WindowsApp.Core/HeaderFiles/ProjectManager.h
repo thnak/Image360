@@ -33,6 +33,11 @@ namespace WindowsApp::Core
         bool AddInputImage(const std::wstring& filePath, const Homography& h, CfaType cfaType = CfaType::BAYER);
         bool UpdateImageGain(int imageId, float gain);
 
+        // Overwrites a previously-computed homography - AddInputImage
+        // only ever sets the initial identity one; Align is the first
+        // stage that computes a real one.
+        bool UpdateHomography(int imageId, const Homography& h);
+
         // Creates one PipelineStage::STAGE0_INGEST / unit_kind="image"
         // task per input image row that doesn't already have one.
         // Idempotent via CreateTasksIfAbsent's UNIQUE(stage, unit_kind,
