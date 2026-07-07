@@ -135,6 +135,91 @@ namespace WindowsApp { namespace Compute
         delete[] rgb;
     }
 
+    ComputeResult NvJpegCodec::Encode(const unsigned char* rgb, int width, int height, int quality,
+                                       std::vector<unsigned char>& outJpegBytes)
+    {
+        if (!m_impl->initialized)
+        {
+            m_impl->SetError("Not initialized.");
+            return ComputeResult::CUDA_ERROR;
+        }
+        if (!rgb || width <= 0 || height <= 0)
+        {
+            m_impl->SetError("Invalid argument.");
+            return ComputeResult::INVALID_PARAM;
+        }
+
+        nvjpegEncoderParams_t params = nullptr;
+        if (nvjpegEncoderParamsCreate(m_impl->handle, &params, nullptr) != NVJPEG_STATUS_SUCCESS)
+        {
+            m_impl->SetError("nvjpegEncoderParamsCreate failed.");
+            return ComputeResult::CUDA_ERROR;
+        }
+        nvjpegEncoderParamsSetQuality(params, quality, nullptr);
+        nvjpegEncoderParamsSetSamplingFactors(params, NVJPEG_CSS_420, nullptr);
+
+        nvjpegEncoderState_t state = nullptr;
+        if (nvjpegEncoderStateCreate(m_impl->handle, &state, nullptr) != NVJPEG_STATUS_SUCCESS)
+        {
+            m_impl->SetError("nvjpegEncoderStateCreate failed.");
+            nvjpegEncoderParamsDestroy(params);
+            return ComputeResult::CUDA_ERROR;
+        }
+
+        size_t pitch = static_cast<size_t>(width) * 3;
+        size_t bufferSize = pitch * static_cast<size_t>(height);
+
+        nvjpegImage_t source = {};
+        if (cudaMalloc(reinterpret_cast<void**>(&source.channel[0]), bufferSize) != cudaSuccess)
+        {
+            m_impl->SetError("cudaMalloc failed for encode source buffer.");
+            nvjpegEncoderStateDestroy(state);
+            nvjpegEncoderParamsDestroy(params);
+            return ComputeResult::OUT_OF_MEMORY;
+        }
+        source.pitch[0] = static_cast<unsigned int>(pitch);
+
+        if (cudaMemcpy(source.channel[0], rgb, bufferSize, cudaMemcpyHostToDevice) != cudaSuccess)
+        {
+            cudaFree(source.channel[0]);
+            nvjpegEncoderStateDestroy(state);
+            nvjpegEncoderParamsDestroy(params);
+            m_impl->SetError("cudaMemcpy failed for encode source buffer.");
+            return ComputeResult::CUDA_ERROR;
+        }
+
+        nvjpegStatus_t encodeStatus = nvjpegEncodeImage(
+            m_impl->handle, state, params, &source, NVJPEG_INPUT_RGBI, width, height, nullptr);
+
+        cudaFree(source.channel[0]);
+
+        if (encodeStatus != NVJPEG_STATUS_SUCCESS)
+        {
+            nvjpegEncoderStateDestroy(state);
+            nvjpegEncoderParamsDestroy(params);
+            m_impl->SetError("nvjpegEncodeImage failed.");
+            return ComputeResult::CUDA_ERROR;
+        }
+
+        size_t bitstreamSize = 0;
+        nvjpegEncodeRetrieveBitstream(m_impl->handle, state, nullptr, &bitstreamSize, nullptr);
+
+        outJpegBytes.resize(bitstreamSize);
+        nvjpegStatus_t retrieveStatus = nvjpegEncodeRetrieveBitstream(
+            m_impl->handle, state, outJpegBytes.data(), &bitstreamSize, nullptr);
+
+        nvjpegEncoderStateDestroy(state);
+        nvjpegEncoderParamsDestroy(params);
+
+        if (retrieveStatus != NVJPEG_STATUS_SUCCESS)
+        {
+            m_impl->SetError("nvjpegEncodeRetrieveBitstream failed.");
+            return ComputeResult::CUDA_ERROR;
+        }
+
+        return ComputeResult::SUCCESS;
+    }
+
     const char* NvJpegCodec::GetLastError() const
     {
         return m_impl->lastError;

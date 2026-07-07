@@ -8,6 +8,7 @@
 
 #include "CudaPipeline.h"
 #include <cstddef>
+#include <vector>
 
 namespace WindowsApp { namespace Compute
 {
@@ -40,6 +41,13 @@ namespace WindowsApp { namespace Compute
                               unsigned char** outRgb, int* outWidth, int* outHeight);
 
         void FreeDecoded(unsigned char* rgb);
+
+        // Encodes an interleaved RGB8 buffer to JPEG bytes (preview/share
+        // export path, docs/ARCHITECTURE.md SS4.5 - not the archival
+        // render output, which stays a lossless format). quality: 0-100,
+        // matches nvjpegEncoderParamsSetQuality's own range.
+        ComputeResult Encode(const unsigned char* rgb, int width, int height, int quality,
+                              std::vector<unsigned char>& outJpegBytes);
 
         const char* GetLastError() const;
 
