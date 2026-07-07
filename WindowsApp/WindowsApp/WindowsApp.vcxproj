@@ -94,6 +94,7 @@
       <LanguageStandard Condition="'$(VisualStudioVersion)' &gt;= '18.0'">stdcpp20</LanguageStandard>
       <LanguageStandard Condition="'$(VisualStudioVersion)' &lt; '18.0'">stdcpp17</LanguageStandard>
       <AdditionalOptions>%(AdditionalOptions) /bigobj /FS</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(SolutionDir)WindowsApp.Core;$(SolutionDir)WindowsApp.Core\HeaderFiles;$(SolutionDir)WindowsApp.Compute;$(SolutionDir)WindowsApp.Compute\HeaderFiles;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
@@ -151,6 +152,19 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      First-ever link from the UI project into the engine. WindowsApp.Core
+      is a static lib but transitively depends on WindowsApp.Compute, a
+      dynamic lib (CUDA DLL) - WindowsApp.Compute.dll needs to be copied
+      into the WindowsApp (Package).wapproj output, which is NOT assumed
+      to happen automatically for a .wapproj the way it would for a plain
+      .exe project. Verify this when running the packaged app.
+    -->
+    <ProjectReference Include="..\..\WindowsApp.Core\WindowsApp.Core.vcxproj">
+      <Project>{d6b1d440-6228-4444-a1a1-9a9eb2d12b11}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

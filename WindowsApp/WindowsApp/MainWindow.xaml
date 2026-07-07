@@ -233,6 +233,43 @@
                             </ListView>
                         </StackPanel>
                     </Border>
+
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="18">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="Panorama Stitch"
+                                       Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <TextBlock x:Name="StitchStatusText"
+                                       Text="No stitch running."
+                                       Style="{StaticResource BodyTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="WrapWholeWords" />
+                            <ProgressBar x:Name="StitchProgressBar"
+                                         Minimum="0"
+                                         Maximum="100"
+                                         Value="0" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="StitchStartButton"
+                                        Content="Start Stitch"
+                                        Click="StitchStartButton_Click"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        HorizontalAlignment="Stretch" />
+                                <Button x:Name="StitchCancelButton"
+                                        Grid.Column="1"
+                                        Content="Cancel"
+                                        IsEnabled="False"
+                                        Click="StitchCancelButton_Click"
+                                        HorizontalAlignment="Stretch" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
         </Grid>
