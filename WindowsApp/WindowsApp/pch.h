@@ -28,3 +28,10 @@
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <wil/cppwinrt_helpers.h>
+
+#include <thread>
+#include <stop_token>
+
+#include "PipelineDriver.h"
+#include "ProjectManager.h"
+#include "TaskScheduler.h"
