@@ -71,6 +71,7 @@
     <ClInclude Include="HeaderFiles\Types.h" />
     <ClInclude Include="HeaderFiles\ProjectManager.h" />
     <ClInclude Include="HeaderFiles\ImageLoader.h" />
+    <ClInclude Include="HeaderFiles\ITaskExecutor.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
   </ItemGroup>
