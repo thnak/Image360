@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "HeaderFiles/OptimizeExecutor.h"
 #include "HeaderFiles/ImageLoader.h"
+#include "HeaderFiles/BundleAdjustment.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -84,7 +85,24 @@ namespace WindowsApp::Core
             return std::nullopt;
         }
 
-        constexpr int kMaxMatchesForGain = 2000;
+        constexpr int kMaxFeatureMatches = 2000;
+
+        bool ParseImagePair(const std::string& unitKey, int& imageA, int& imageB)
+        {
+            size_t colon = unitKey.find(':');
+            if (colon == std::string::npos) return false;
+
+            try
+            {
+                imageA = std::stoi(unitKey.substr(0, colon));
+                imageB = std::stoi(unitKey.substr(colon + 1));
+            }
+            catch (...)
+            {
+                return false;
+            }
+            return true;
+        }
 
         std::optional<int64_t> FindIngestBlobId(ProjectManager& projectManager, int imageId)
         {
@@ -176,12 +194,12 @@ namespace WindowsApp::Core
             return m_projectManager.UpdateImageGain(imageId, 1.0f);
         }
 
-        std::vector<Compute::MatchResult> matches(kMaxMatchesForGain);
+        std::vector<Compute::MatchResult> matches(kMaxFeatureMatches);
         int matchCount = 0;
         Compute::ComputeResult matchResult = m_cudaPipeline->MatchFeatures(
             reinterpret_cast<const Compute::BriefDescriptor*>(refDescWords.data()), static_cast<int>(refPoints.size()),
             reinterpret_cast<const Compute::BriefDescriptor*>(targetDescWords.data()), static_cast<int>(targetPoints.size()),
-            matches.data(), &matchCount, kMaxMatchesForGain);
+            matches.data(), &matchCount, kMaxFeatureMatches);
         if (matchResult != Compute::ComputeResult::SUCCESS || matchCount == 0)
         {
             return m_projectManager.UpdateImageGain(imageId, 1.0f);
@@ -332,9 +350,139 @@ namespace WindowsApp::Core
         return true;
     }
 
-    // Implemented in a follow-up issue (Task 4).
-    bool OptimizeExecutor::ExecuteBundleAdjustment(Task& /* task */, CancellationToken /* token */)
+    bool OptimizeExecutor::ExecuteBundleAdjustment(Task& task, CancellationToken token)
     {
-        return false;
+        if (!m_cudaPipeline) return false;
+
+        auto refIdOpt = ReferenceImageId(m_projectManager);
+        if (!refIdOpt.has_value()) return false;
+        int refId = refIdOpt.value();
+
+        std::vector<int> nonReferenceImageIds;
+        for (const auto& img : m_projectManager.GetInputImages())
+        {
+            if (img.id != refId) nonReferenceImageIds.push_back(img.id);
+        }
+
+        if (nonReferenceImageIds.empty())
+        {
+            // Only one image in the project - nothing to jointly optimize.
+            return true;
+        }
+
+        // Re-derive correspondences once (not per LM iteration, since
+        // they don't depend on the current parameter estimate) from
+        // every completed Align "pair" task's persisted feature blobs -
+        // same re-derivation approach ExecuteGain already uses.
+        std::vector<BaCorrespondence> correspondences;
+        for (const auto& pairTask : m_projectManager.GetTasksForStage(PipelineStage::STAGE1_ALIGN))
+        {
+            if (token.stop_requested()) return false;
+            if (pairTask.unitKind != "pair" || pairTask.status != TaskStatus::COMPLETED) continue;
+
+            int imageA = 0;
+            int imageB = 0;
+            if (!ParseImagePair(pairTask.unitKey, imageA, imageB)) continue;
+
+            auto blobIdA = FindAlignFeatureBlobId(m_projectManager, imageA);
+            auto blobIdB = FindAlignFeatureBlobId(m_projectManager, imageB);
+            if (!blobIdA.has_value() || !blobIdB.has_value()) continue;
+
+            auto bytesA = m_storageEngine.ReadBlob(blobIdA.value());
+            auto bytesB = m_storageEngine.ReadBlob(blobIdB.value());
+            if (!bytesA.has_value() || !bytesB.has_value()) continue;
+
+            std::vector<Compute::FeaturePoint> pointsA, pointsB;
+            std::vector<uint64_t> descWordsA, descWordsB;
+            if (!DeserializeFeatures(bytesA.value(), pointsA, descWordsA)) continue;
+            if (!DeserializeFeatures(bytesB.value(), pointsB, descWordsB)) continue;
+            if (pointsA.empty() || pointsB.empty()) continue;
+
+            std::vector<Compute::MatchResult> matches(kMaxFeatureMatches);
+            int matchCount = 0;
+            Compute::ComputeResult matchResult = m_cudaPipeline->MatchFeatures(
+                reinterpret_cast<const Compute::BriefDescriptor*>(descWordsA.data()), static_cast<int>(pointsA.size()),
+                reinterpret_cast<const Compute::BriefDescriptor*>(descWordsB.data()), static_cast<int>(pointsB.size()),
+                matches.data(), &matchCount, kMaxFeatureMatches);
+            if (matchResult != Compute::ComputeResult::SUCCESS) continue;
+
+            for (int i = 0; i < matchCount; ++i)
+            {
+                BaCorrespondence corr;
+                corr.imageA = imageA;
+                corr.imageB = imageB;
+                corr.pointA = pointsA[matches[i].indexA];
+                corr.pointB = pointsB[matches[i].indexB];
+                correspondences.push_back(corr);
+            }
+        }
+
+        if (correspondences.empty())
+        {
+            // Nothing to jointly refine - not a failure, homographies
+            // stay whatever Align's pairwise pass already produced.
+            return true;
+        }
+
+        // Load the checkpoint or start fresh with identity parameters -
+        // covers both "never started" and "resuming" (SS7.3's "resume
+        // means continue a computation" exception).
+        BaCheckpoint checkpoint;
+        bool haveCheckpoint = !task.checkpointJson.empty() && DeserializeCheckpoint(task.checkpointJson, checkpoint);
+        if (!haveCheckpoint || checkpoint.parameters.size() != nonReferenceImageIds.size() * 8)
+        {
+            checkpoint = BaCheckpoint{};
+            checkpoint.parameters.resize(nonReferenceImageIds.size() * 8);
+            for (size_t k = 0; k < nonReferenceImageIds.size(); ++k)
+            {
+                float* p = &checkpoint.parameters[k * 8];
+                p[0] = 1.0f; p[1] = 0.0f; p[2] = 0.0f;
+                p[3] = 0.0f; p[4] = 1.0f; p[5] = 0.0f;
+                p[6] = 0.0f; p[7] = 0.0f;
+            }
+        }
+
+        constexpr int kCheckpointInterval = 5;
+        constexpr int kMaxIterations = 100;
+
+        bool converged = false;
+        for (int i = 0; i < kMaxIterations; ++i)
+        {
+            if (token.stop_requested())
+            {
+                m_projectManager.UpdateTaskCheckpoint(task.taskId, SerializeCheckpoint(checkpoint));
+                return false;
+            }
+
+            LmStepResult step = RunOneLmIteration(*m_cudaPipeline, nonReferenceImageIds, correspondences, checkpoint);
+            checkpoint = step.checkpoint;
+
+            if (step.converged)
+            {
+                converged = true;
+                break;
+            }
+
+            if ((checkpoint.iteration % kCheckpointInterval) == 0)
+            {
+                m_projectManager.UpdateTaskCheckpoint(task.taskId, SerializeCheckpoint(checkpoint));
+            }
+        }
+
+        if (!converged)
+        {
+            // Hit the iteration budget without formally converging -
+            // still commit the best parameters found, and checkpoint
+            // them so a retry of this task continues rather than restarts.
+            m_projectManager.UpdateTaskCheckpoint(task.taskId, SerializeCheckpoint(checkpoint));
+        }
+
+        for (size_t k = 0; k < nonReferenceImageIds.size(); ++k)
+        {
+            Homography h = HomographyFromBaParams(&checkpoint.parameters[k * 8]);
+            if (!m_projectManager.UpdateHomography(nonReferenceImageIds[k], h)) return false;
+        }
+
+        return true;
     }
 }

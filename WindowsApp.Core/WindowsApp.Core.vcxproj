@@ -79,6 +79,7 @@
     <ClInclude Include="HeaderFiles\RansacHomography.h" />
     <ClInclude Include="HeaderFiles\AlignExecutor.h" />
     <ClInclude Include="HeaderFiles\OptimizeExecutor.h" />
+    <ClInclude Include="HeaderFiles\BundleAdjustment.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
   </ItemGroup>
@@ -111,6 +112,9 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="SourceFiles\OptimizeExecutor.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\BundleAdjustment.cpp">
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="sqlite3\sqlite3.c">
