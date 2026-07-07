@@ -28,12 +28,24 @@ namespace
     class DemoStitchExecutor : public ::WindowsApp::Core::ITaskExecutor
     {
     public:
+        explicit DemoStitchExecutor(std::chrono::milliseconds duration) : m_duration(duration) {}
+
         bool Execute(::WindowsApp::Core::Task& /* task */, ::WindowsApp::Core::CancellationToken /* token */) override
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            std::this_thread::sleep_for(m_duration);
             return true;
         }
+
+    private:
+        std::chrono::milliseconds m_duration;
     };
+
+    // kMaxInFlight (TaskScheduler.h) is 4, so this many tasks at this
+    // duration take ~kDemoTaskCount / 4 * kDemoTaskDuration wall-clock -
+    // long enough to actually see the progress bar move and to click
+    // Cancel mid-run, unlike a handful of near-instant tasks.
+    constexpr int kDemoTaskCount = 40;
+    constexpr std::chrono::milliseconds kDemoTaskDuration{ 500 };
 
     winrt::hstring StageToDisplayString(::WindowsApp::Core::PipelineStage stage)
     {
@@ -174,15 +186,24 @@ namespace winrt::WindowsApp::implementation
         std::wstring projectPath = StitchProjectPath();
 
         // Deliberately minimal stand-in for real project creation (see this
-        // plan's Global Constraints) - CreateProject is safe to call again
-        // on an existing file: its schema uses CREATE TABLE IF NOT EXISTS
-        // and never touches existing task rows.
+        // plan's Global Constraints). Delete any leftover demo project from
+        // a previous manual test run first - CreateProject alone is safe to
+        // call on an existing file (CREATE TABLE IF NOT EXISTS, never
+        // touches existing rows), but that also means a prior run's already-
+        // COMPLETED demo tasks would make every click after the first finish
+        // instantly via the (correct) resume/skip path, which is exactly
+        // what you don't want when manually testing "does this take long
+        // enough to see progress and try Cancel".
+        m_stitchProject.CloseProject(); // release any handle from a prior click before deleting the file
+        DeleteFileW(projectPath.c_str());
+        DeleteFileW((projectPath + L"-wal").c_str());
+        DeleteFileW((projectPath + L"-shm").c_str());
         m_stitchProject.CreateProject(projectPath, 8192, 8192);
 
         if (m_stitchProject.GetTasksForStage(PipelineStage::STAGE1_ALIGN).empty())
         {
             std::vector<Task> seeds;
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < kDemoTaskCount; ++i)
             {
                 Task t;
                 t.stage = PipelineStage::STAGE1_ALIGN;
@@ -193,7 +214,8 @@ namespace winrt::WindowsApp::implementation
             m_stitchProject.CreateTasksIfAbsent(seeds);
         }
 
-        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE1_ALIGN, std::make_shared<DemoStitchExecutor>());
+        m_pipelineDriver.RegisterExecutor(
+            PipelineStage::STAGE1_ALIGN, std::make_shared<DemoStitchExecutor>(kDemoTaskDuration));
 
         m_stitchStopSource = std::stop_source();
         auto token = m_stitchStopSource.get_token();
