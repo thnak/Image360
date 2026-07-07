@@ -8,7 +8,7 @@
 #include <vector>
 #include <algorithm>
 
-namespace WindowsApp::Compute
+namespace WindowsApp { namespace Compute
 {
     struct CudaContext
     {
@@ -41,21 +41,21 @@ namespace WindowsApp::Compute
     };
 
     // CUDA error checking macro
-    #define CUDA_CHECK(call) \
+    #define CUDA_CHECK(call, lastError) \
         do { \
             cudaError_t err = (call); \
             if (err != cudaSuccess) { \
-                snprintf(m_lastError, sizeof(m_lastError), \
+                snprintf(lastError, sizeof(lastError), \
                     "CUDA error at %s:%d: %s", __FILE__, __LINE__, cudaGetErrorString(err)); \
                 return ComputeResult::CUDA_ERROR; \
             } \
         } while (0)
 
-    #define CUDA_CHECK_VOID(call) \
+    #define CUDA_CHECK_VOID(call, lastError) \
         do { \
             cudaError_t err = (call); \
             if (err != cudaSuccess) { \
-                snprintf(m_lastError, sizeof(m_lastError), \
+                snprintf(lastError, sizeof(lastError), \
                     "CUDA error at %s:%d: %s", __FILE__, __LINE__, cudaGetErrorString(err)); \
                 return; \
             } \
@@ -99,12 +99,12 @@ namespace WindowsApp::Compute
             }
         }
 
-        CUDA_CHECK(cudaSetDevice(bestDevice));
+        CUDA_CHECK(cudaSetDevice(bestDevice), m_lastError);
         m_ctx->deviceId = bestDevice;
 
         // Query device properties
         cudaDeviceProp prop;
-        CUDA_CHECK(cudaGetDeviceProperties(&prop, bestDevice));
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, bestDevice), m_lastError);
 
         strncpy_s(m_ctx->gpuInfo.name, prop.name, sizeof(m_ctx->gpuInfo.name) - 1);
         m_ctx->gpuInfo.deviceId = bestDevice;
@@ -191,25 +191,25 @@ namespace WindowsApp::Compute
         unsigned short* d_dst = nullptr;
         float* d_invH = nullptr;
 
-        CUDA_CHECK(cudaMalloc(&d_src, srcSize));
-        CUDA_CHECK(cudaMalloc(&d_dst, dstSize));
-        CUDA_CHECK(cudaMalloc(&d_invH, 9 * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_src, srcSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_dst, dstSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_invH, 9 * sizeof(float)), m_lastError);
 
-        CUDA_CHECK(cudaMemcpy(d_src, srcData, srcSize, cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_invH, invH, 9 * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_src, srcData, srcSize, cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_invH, invH, 9 * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
 
         // Launch kernel
         dim3 block(16, 16);
         dim3 grid((dstW + block.x - 1) / block.x, (dstH + block.y - 1) / block.y);
 
-        Kernels::WarpPerspectiveKernel<<<grid, block>>>(
+        WindowsApp::Compute::Kernels::WarpPerspectiveKernel<<<grid, block>>>(
             d_src, d_dst, srcW, srcH, dstW, dstH, d_invH, offsetX, offsetY);
 
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
 
         // Copy result back
-        CUDA_CHECK(cudaMemcpy(dstData, d_dst, dstSize, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(dstData, d_dst, dstSize, cudaMemcpyDeviceToHost), m_lastError);
 
         // Cleanup
         cudaFree(d_src);
@@ -240,28 +240,28 @@ namespace WindowsApp::Compute
         unsigned short* d_inputs = nullptr;
         unsigned short* d_output = nullptr;
 
-        CUDA_CHECK(cudaMalloc(&d_inputs, totalInputSize));
-        CUDA_CHECK(cudaMalloc(&d_output, singleImageSize));
+        CUDA_CHECK(cudaMalloc(&d_inputs, totalInputSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_output, singleImageSize), m_lastError);
 
         // Copy all input images to device
         for (int i = 0; i < numInputs; i++)
         {
             CUDA_CHECK(cudaMemcpy(d_inputs + i * numPixels, inputs[i],
-                                   singleImageSize, cudaMemcpyHostToDevice));
+                                   singleImageSize, cudaMemcpyHostToDevice), m_lastError);
         }
 
         // Launch kernel
         int threadsPerBlock = 256;
         int blocks = (numPixels + threadsPerBlock - 1) / threadsPerBlock;
 
-        Kernels::MedianStackKernel<<<blocks, threadsPerBlock>>>(
+        WindowsApp::Compute::Kernels::MedianStackKernel<<<blocks, threadsPerBlock>>>(
             d_inputs, d_output, numInputs, numPixels, sigmaThreshold);
 
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
 
         // Copy result back
-        CUDA_CHECK(cudaMemcpy(output, d_output, singleImageSize, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(output, d_output, singleImageSize, cudaMemcpyDeviceToHost), m_lastError);
 
         // Cleanup
         cudaFree(d_inputs);
@@ -292,12 +292,12 @@ namespace WindowsApp::Compute
         unsigned short* d_imgB = nullptr;
         unsigned short* d_output = nullptr;
 
-        CUDA_CHECK(cudaMalloc(&d_imgA, imageSize));
-        CUDA_CHECK(cudaMalloc(&d_imgB, imageSize));
-        CUDA_CHECK(cudaMalloc(&d_output, imageSize));
+        CUDA_CHECK(cudaMalloc(&d_imgA, imageSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_imgB, imageSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_output, imageSize), m_lastError);
 
-        CUDA_CHECK(cudaMemcpy(d_imgA, imgA, imageSize, cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_imgB, imgB, imageSize, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_imgA, imgA, imageSize, cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_imgB, imgB, imageSize, cudaMemcpyHostToDevice), m_lastError);
 
         // Build Laplacian pyramids for both images
         // For simplicity, process each color channel separately
@@ -355,11 +355,11 @@ namespace WindowsApp::Compute
 
             dim3 grid((dstW + block.x - 1) / block.x, (dstH + block.y - 1) / block.y);
 
-            Kernels::Downsample2x<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::Downsample2x<<<grid, block>>>(
                 pyramidA[level - 1].d_data, pyramidA[level].d_data,
                 srcW, srcH, dstW, dstH);
 
-            Kernels::Downsample2x<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::Downsample2x<<<grid, block>>>(
                 pyramidB[level - 1].d_data, pyramidB[level].d_data,
                 srcW, srcH, dstW, dstH);
         }
@@ -382,19 +382,19 @@ namespace WindowsApp::Compute
             dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
 
             // Upsample lower level to current size
-            Kernels::Upsample2x<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::Upsample2x<<<grid, block>>>(
                 pyramidA[level + 1].d_data, d_upsampledA,
                 pyramidA[level + 1].w, pyramidA[level + 1].h, w, h);
 
-            Kernels::Upsample2x<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::Upsample2x<<<grid, block>>>(
                 pyramidB[level + 1].d_data, d_upsampledB,
                 pyramidB[level + 1].w, pyramidB[level + 1].h, w, h);
 
             // Laplacian = current - upsampled
-            Kernels::LaplacianSubtract<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::LaplacianSubtract<<<grid, block>>>(
                 pyramidA[level].d_data, d_upsampledA, pyramidA[level].d_data, w, h);
 
-            Kernels::LaplacianSubtract<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::LaplacianSubtract<<<grid, block>>>(
                 pyramidB[level].d_data, d_upsampledB, pyramidB[level].d_data, w, h);
 
             cudaFree(d_upsampledA);
@@ -419,7 +419,7 @@ namespace WindowsApp::Compute
                 weightB = 0.5f;
             }
 
-            Kernels::BlendLaplacianLevels<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::BlendLaplacianLevels<<<grid, block>>>(
                 pyramidA[level].d_data, pyramidB[level].d_data,
                 blendedPyramid[level].d_data, w, h, weightA, weightB);
         }
@@ -438,12 +438,12 @@ namespace WindowsApp::Compute
             dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
 
             // Upsample blended lower level
-            Kernels::Upsample2x<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::Upsample2x<<<grid, block>>>(
                 blendedPyramid[level + 1].d_data, d_upsampled,
                 blendedPyramid[level + 1].w, blendedPyramid[level + 1].h, w, h);
 
             // Reconstruct: laplacian + upsampled
-            Kernels::LaplacianReconstruct<<<grid, block>>>(
+            WindowsApp::Compute::Kernels::LaplacianReconstruct<<<grid, block>>>(
                 blendedPyramid[level].d_data, d_upsampled,
                 blendedPyramid[level].d_data, w, h);
 
@@ -451,7 +451,7 @@ namespace WindowsApp::Compute
         }
 
         // Copy final result
-        CUDA_CHECK(cudaMemcpy(output, blendedPyramid[0].d_data, imageSize, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(output, blendedPyramid[0].d_data, imageSize, cudaMemcpyDeviceToHost), m_lastError);
 
         // Cleanup
         for (int level = 0; level < numBands; level++)
@@ -481,18 +481,18 @@ namespace WindowsApp::Compute
         size_t dataSize = numPixels * sizeof(unsigned short);
         unsigned short* d_data = nullptr;
 
-        CUDA_CHECK(cudaMalloc(&d_data, dataSize));
-        CUDA_CHECK(cudaMemcpy(d_data, data, dataSize, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMalloc(&d_data, dataSize), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_data, data, dataSize, cudaMemcpyHostToDevice), m_lastError);
 
         int threadsPerBlock = 256;
         int blocks = (numPixels + threadsPerBlock - 1) / threadsPerBlock;
 
-        Kernels::ApplyGainKernel<<<blocks, threadsPerBlock>>>(d_data, numPixels, gain);
+        WindowsApp::Compute::Kernels::ApplyGainKernel<<<blocks, threadsPerBlock>>>(d_data, numPixels, gain);
 
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
 
-        CUDA_CHECK(cudaMemcpy(data, d_data, dataSize, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(data, d_data, dataSize, cudaMemcpyDeviceToHost), m_lastError);
 
         cudaFree(d_data);
         return ComputeResult::SUCCESS;
@@ -531,21 +531,21 @@ namespace WindowsApp::Compute
         float* d_A_float = nullptr;
         float* d_B_float = nullptr;
 
-        CUDA_CHECK(cudaMalloc(&d_A_half, sizeA * sizeof(__half)));
-        CUDA_CHECK(cudaMalloc(&d_B_half, sizeB * sizeof(__half)));
-        CUDA_CHECK(cudaMalloc(&d_C, sizeC * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_A_float, sizeA * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_B_float, sizeB * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_A_half, sizeA * sizeof(__half)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_B_half, sizeB * sizeof(__half)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_C, sizeC * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_A_float, sizeA * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_B_float, sizeB * sizeof(float)), m_lastError);
 
-        CUDA_CHECK(cudaMemcpy(d_A_float, A, sizeA * sizeof(float), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_B_float, B, sizeB * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_A_float, A, sizeA * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_B_float, B, sizeB * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
 
         // Convert FP32 -> FP16
         int threads = 256;
-        Kernels::FloatToHalf<<<(sizeA + threads - 1) / threads, threads>>>(d_A_float, d_A_half, (int)sizeA);
-        CUDA_CHECK(cudaGetLastError());
-        Kernels::FloatToHalf<<<(sizeB + threads - 1) / threads, threads>>>(d_B_float, d_B_half, (int)sizeB);
-        CUDA_CHECK(cudaGetLastError());
+        WindowsApp::Compute::Kernels::FloatToHalf<<<(sizeA + threads - 1) / threads, threads>>>(d_A_float, d_A_half, (int)sizeA);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        WindowsApp::Compute::Kernels::FloatToHalf<<<(sizeB + threads - 1) / threads, threads>>>(d_B_float, d_B_half, (int)sizeB);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
 
         // Launch WMMA batched matmul
         // Each block handles one batch, warps handle 16x16 tiles
@@ -557,13 +557,13 @@ namespace WindowsApp::Compute
         dim3 grid(tilesN, tilesM, batchSize);
         dim3 block(threadsPerBlock);
 
-        Kernels::TensorBatchMatMul<<<grid, block>>>(
+        WindowsApp::Compute::Kernels::TensorBatchMatMul<<<grid, block>>>(
             d_A_half, d_B_half, d_C,
             batchA_M, batchA_K, batchB_N, batchSize);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
 
-        CUDA_CHECK(cudaMemcpy(C, d_C, sizeC * sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(C, d_C, sizeC * sizeof(float), cudaMemcpyDeviceToHost), m_lastError);
 
         cudaFree(d_A_half);
         cudaFree(d_B_half);
@@ -590,19 +590,19 @@ namespace WindowsApp::Compute
         float* d_AtA_copy = nullptr;
         float* d_h = nullptr;
 
-        CUDA_CHECK(cudaMalloc(&d_pairs, numPairs * 4 * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_AtA, 9 * 9 * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_AtA_copy, 9 * 9 * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_h, 9 * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_pairs, numPairs * 4 * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_AtA, 9 * 9 * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_AtA_copy, 9 * 9 * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_h, 9 * sizeof(float)), m_lastError);
 
-        CUDA_CHECK(cudaMemcpy(d_pairs, pointPairs, numPairs * 4 * sizeof(float), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemset(d_AtA, 0, 9 * 9 * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_h, 0, 9 * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(d_pairs, pointPairs, numPairs * 4 * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemset(d_AtA, 0, 9 * 9 * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMemset(d_h, 0, 9 * sizeof(float)), m_lastError);
 
         // Build AtA
         int threads = 256;
-        Kernels::TensorBuildAtA<<<1, threads>>>(d_pairs, d_AtA, numPairs);
-        CUDA_CHECK(cudaGetLastError());
+        WindowsApp::Compute::Kernels::TensorBuildAtA<<<1, threads>>>(d_pairs, d_AtA, numPairs);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
 
         // Build Atb from the same point pairs
         // Atb[i] = sum over correspondences of A_row0[i]*xp + A_row1[i]*yp
@@ -624,20 +624,20 @@ namespace WindowsApp::Compute
 
         float* d_AtA_ref = nullptr;
         float* d_AtA_out = nullptr;
-        CUDA_CHECK(cudaMalloc(&d_AtA_ref, 9 * 9 * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_AtA_out, 9 * 9 * sizeof(float)));
-        CUDA_CHECK(cudaMemcpy(d_AtA_ref, Atb, 9 * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMalloc(&d_AtA_ref, 9 * 9 * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_AtA_out, 9 * 9 * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_AtA_ref, Atb, 9 * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
 
         // Solve via Cholesky on GPU
         // Copy AtA for in-place decomposition
-        CUDA_CHECK(cudaMemcpy(d_AtA_copy, d_AtA, 9 * 9 * sizeof(float), cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(d_AtA_copy, d_AtA, 9 * 9 * sizeof(float), cudaMemcpyDeviceToDevice), m_lastError);
 
-        Kernels::TensorSolveHomography<<<1, 1>>>(d_AtA_copy, d_AtA_ref, d_h);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+        WindowsApp::Compute::Kernels::TensorSolveHomography<<<1, 1>>>(d_AtA_copy, d_AtA_ref, d_h);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
 
         // Copy result
-        CUDA_CHECK(cudaMemcpy(homography, d_h, 9 * sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(homography, d_h, 9 * sizeof(float), cudaMemcpyDeviceToHost), m_lastError);
 
         // Normalize so h[8] = 1
         if (fabsf(homography[8]) > 1e-10f)
@@ -678,35 +678,35 @@ namespace WindowsApp::Compute
         float* d_JtJ = nullptr;
         float* d_Jtr = nullptr;
 
-        CUDA_CHECK(cudaMalloc(&d_J_half, J_size * sizeof(__half)));
-        CUDA_CHECK(cudaMalloc(&d_J, J_size * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_r, numResiduals * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_JtJ, JtJ_size * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_Jtr, numParams * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_J_half, J_size * sizeof(__half)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_J, J_size * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_r, numResiduals * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_JtJ, JtJ_size * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_Jtr, numParams * sizeof(float)), m_lastError);
 
-        CUDA_CHECK(cudaMemcpy(d_J, J, J_size * sizeof(float), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_r, r, numResiduals * sizeof(float), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemset(d_JtJ, 0, JtJ_size * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_Jtr, 0, numParams * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(d_J, J, J_size * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_r, r, numResiduals * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemset(d_JtJ, 0, JtJ_size * sizeof(float)), m_lastError);
+        CUDA_CHECK(cudaMemset(d_Jtr, 0, numParams * sizeof(float)), m_lastError);
 
         // Convert J to FP16 for tensor core matmul
         int threads = 256;
-        Kernels::FloatToHalf<<<(J_size + threads - 1) / threads, threads>>>(d_J, d_J_half, (int)J_size);
-        CUDA_CHECK(cudaGetLastError());
+        WindowsApp::Compute::Kernels::FloatToHalf<<<(J_size + threads - 1) / threads, threads>>>(d_J, d_J_half, (int)J_size);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
 
         // Compute normal equations: JtJ = J^T * J + lambda * I, Jtr = J^T * r
         int totalElements = numParams * numParams;
-        Kernels::TensorNormalEquations<<<(totalElements + threads - 1) / threads, threads>>>(
+        WindowsApp::Compute::Kernels::TensorNormalEquations<<<(totalElements + threads - 1) / threads, threads>>>(
             d_J_half, d_r, d_JtJ, d_Jtr, numResiduals, numParams);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
 
         // Add LM damping: JtJ += lambda * diag(JtJ)
         // Done on CPU for small systems, or on GPU for large ones
         std::vector<float> h_JtJ(JtJ_size);
         std::vector<float> h_Jtr(numParams);
-        CUDA_CHECK(cudaMemcpy(h_JtJ.data(), d_JtJ, JtJ_size * sizeof(float), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(h_Jtr.data(), d_Jtr, numParams * sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_JtJ.data(), d_JtJ, JtJ_size * sizeof(float), cudaMemcpyDeviceToHost), m_lastError);
+        CUDA_CHECK(cudaMemcpy(h_Jtr.data(), d_Jtr, numParams * sizeof(float), cudaMemcpyDeviceToHost), m_lastError);
 
         for (int i = 0; i < numParams; i++)
         {
@@ -764,5 +764,6 @@ namespace WindowsApp::Compute
         cudaFree(d_Jtr);
 
         return ComputeResult::SUCCESS;
+    }
     }
 }

@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace WindowsApp::Compute
+namespace WindowsApp { namespace Compute
 {
     // GPU device information
     struct GpuInfo
@@ -144,4 +144,5 @@ namespace WindowsApp::Compute
 
         void SetError(const char* msg);
     };
+    }
 }

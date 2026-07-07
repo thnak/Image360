@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-namespace WindowsApp::Compute::Kernels
+namespace WindowsApp { namespace Compute { namespace Kernels
 {
     // =====================================================================
     // Kernel 1: Perspective Warp (backward mapping)
@@ -98,4 +98,6 @@ namespace WindowsApp::Compute::Kernels
         const unsigned short* __restrict__ input,
         unsigned short* __restrict__ output,
         int srcW, int srcH, int dstW, int dstH);
+    }
+    }
 }

@@ -35,7 +35,7 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.6.props" Condition="exists('$(VCTargetsPath)\BuildCustomizations\CUDA 12.6.props')" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.3.props" Condition="exists('$(VCTargetsPath)\BuildCustomizations\CUDA 13.3.props')" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
@@ -48,12 +48,17 @@
       <LanguageStandard Condition="'$(VisualStudioVersion)' &lt; '18.0'">stdcpp17</LanguageStandard>
       <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
       <PreprocessorDefinitions>WIN32;_WINDOWS;_USRDLL;WINDOWSAPPCOMPUTE_EXPORTS;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)HeaderFiles;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)HeaderFiles;$(CUDA_PATH)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
+      <AdditionalLibraryDirectories>$(CUDA_PATH)\lib\x64</AdditionalLibraryDirectories>
     </Link>
+    <CudaCompile>
+      <CodeGeneration>compute_89,sm_89</CodeGeneration>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)HeaderFiles;$(CUDA_PATH)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
     <ClCompile>
@@ -75,14 +80,12 @@
     <ClInclude Include="HeaderFiles\tensor_ops.cuh" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="SourceFiles\CudaPipeline.cpp" />
-  </ItemGroup>
-  <ItemGroup>
+    <CudaCompile Include="SourceFiles\CudaPipeline.cpp" />
     <CudaCompile Include="SourceFiles\median_stack.cu" />
     <CudaCompile Include="SourceFiles\tensor_ops.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.6.targets" Condition="exists('$(VCTargetsPath)\BuildCustomizations\CUDA 12.6.targets')" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.3.targets" Condition="exists('$(VCTargetsPath)\BuildCustomizations\CUDA 13.3.targets')" />
   </ImportGroup>
 </Project>

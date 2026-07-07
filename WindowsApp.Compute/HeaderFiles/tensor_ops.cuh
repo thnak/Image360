@@ -5,7 +5,7 @@
 #include <mma.h>
 #include <cstdint>
 
-namespace WindowsApp::Compute::Kernels
+namespace WindowsApp { namespace Compute { namespace Kernels
 {
     // WMMA tile dimensions (Volta/Ampere tensor cores: 16x16x16)
     constexpr int WMMA_M = 16;
@@ -85,4 +85,6 @@ namespace WindowsApp::Compute::Kernels
         float* __restrict__ JtJ,
         float* __restrict__ Jtr,
         int numResiduals, int numParams);
+    }
+    }
 }
