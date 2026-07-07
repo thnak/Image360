@@ -74,6 +74,7 @@
     <ClInclude Include="HeaderFiles\ITaskExecutor.h" />
     <ClInclude Include="HeaderFiles\TaskScheduler.h" />
     <ClInclude Include="HeaderFiles\PipelineDriver.h" />
+    <ClInclude Include="HeaderFiles\StorageEngine.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
   </ItemGroup>
@@ -91,6 +92,9 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="SourceFiles\PipelineDriver.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\StorageEngine.cpp">
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="sqlite3\sqlite3.c">
