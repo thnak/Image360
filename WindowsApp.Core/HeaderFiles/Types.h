@@ -2,6 +2,9 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <optional>
+#include <cstdint>
+#include <stop_token>
 
 namespace WindowsApp::Core
 {
@@ -12,6 +15,53 @@ namespace WindowsApp::Core
         COMPLETED,
         FAILED
     };
+
+    enum class PipelineStage
+    {
+        IDLE,
+        STAGE0_INGEST,
+        STAGE1_ALIGN,
+        STAGE2_OPTIMIZE,
+        STAGE3_RENDER,
+        COMPLETED,
+        CANCELLED,
+        FAILED
+    };
+
+    enum class TaskStatus
+    {
+        PENDING,
+        RUNNING,
+        COMPLETED,
+        FAILED,
+        CANCELLED
+    };
+
+    struct Task
+    {
+        int64_t taskId = 0;
+        PipelineStage stage = PipelineStage::IDLE;
+        std::string unitKind;   // "image" | "image_band" | "pair" | "chunk" | "ba_checkpoint"
+        std::string unitKey;    // e.g. "img_7", "img_7:band_3", "img_2:img_9", "C_4_2"
+        TaskStatus status = TaskStatus::PENDING;
+        int attemptCount = 0;
+        std::optional<int64_t> outputBlobId;
+        std::string checkpointJson;
+    };
+
+    struct BlobDirectoryEntry
+    {
+        int64_t blobId = 0;
+        std::wstring shardFile;
+        int64_t offset = 0;
+        int64_t length = 0;
+        std::optional<int64_t> compressedLength;
+        std::string formatTag; // e.g. "raw_rgb48", "gdeflate", "nvjpeg"
+    };
+
+    // Placed here (not a new header) because it's used by Task-adjacent
+    // signatures across both WindowsApp.Core and, later, WindowsApp.Compute.
+    using CancellationToken = std::stop_token;
 
     struct PixelBuffer
     {
