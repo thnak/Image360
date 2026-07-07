@@ -54,6 +54,10 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <AdditionalLibraryDirectories>$(CUDA_PATH)\lib\x64</AdditionalLibraryDirectories>
+      <!-- nvjpeg is bundled with the CUDA Toolkit but is a separate lib
+           from cudart (which nvcc/CudaCompile links automatically) -
+           needs to be named explicitly. -->
+      <AdditionalDependencies>nvjpeg.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <CudaCompile>
       <CodeGeneration>compute_89,sm_89</CodeGeneration>
@@ -79,12 +83,14 @@
     <ClInclude Include="HeaderFiles\median_stack.cuh" />
     <ClInclude Include="HeaderFiles\tensor_ops.cuh" />
     <ClInclude Include="HeaderFiles\demosaic.cuh" />
+    <ClInclude Include="HeaderFiles\NvJpegCodec.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="SourceFiles\CudaPipeline.cpp" />
     <CudaCompile Include="SourceFiles\median_stack.cu" />
     <CudaCompile Include="SourceFiles\tensor_ops.cu" />
     <CudaCompile Include="SourceFiles\demosaic.cu" />
+    <CudaCompile Include="SourceFiles\NvJpegCodec.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
