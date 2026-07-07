@@ -1,6 +1,8 @@
 #pragma once
 #include "ProjectManager.h"
 #include <string>
+#include <vector>
+#include <optional>
 #include <cstdint>
 #include <Windows.h>
 
@@ -29,6 +31,28 @@ namespace WindowsApp::Core
                   ProjectManager& projectManager);
         void Close();
         bool IsOpen() const;
+
+        // Appends `length` bytes from `data` to the active shard (rolling
+        // to a new shard first if this write would exceed kMaxShardBytes),
+        // registers a blob_directory row via
+        // ProjectManager::AddBlobDirectoryEntry, and returns the new
+        // blobId.
+        //
+        // DURABILITY ORDERING (docs/ARCHITECTURE.md SS5, SS7.2): the
+        // caller MUST call
+        // ProjectManager::CommitTaskOutput(taskId, blobId) only AFTER
+        // this returns successfully - never before, never speculatively.
+        // If the process dies between this call and CommitTaskOutput,
+        // the written bytes are simply an orphaned, harmless blob and
+        // the owning task re-runs from scratch on resume (idempotency,
+        // SS7.1). The reverse ordering would mark a task COMPLETED with
+        // no data backing it.
+        std::optional<int64_t> WriteBlob(const void* data, size_t length, const std::string& formatTag);
+
+        // Looks up the blob's BlobDirectoryEntry, opens its shard (which
+        // may not be the currently-active one), and reads back the full
+        // byte range.
+        std::optional<std::vector<uint8_t>> ReadBlob(int64_t blobId);
 
     private:
         ProjectManager* m_projectManager = nullptr;
