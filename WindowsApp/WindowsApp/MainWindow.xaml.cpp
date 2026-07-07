@@ -51,6 +51,29 @@ namespace
         }
         return L"Stitching...";
     }
+
+    // ApplicationData::Current() throws ("The process has no package
+    // identity") unless the app is running with MSIX package identity -
+    // i.e. launched via the WindowsApp (Package) project, not the bare
+    // WindowsApp.exe. Fall back to %LOCALAPPDATA%\Image360 so the demo
+    // stitch works either way instead of crashing when run unpackaged.
+    std::wstring StitchProjectPath()
+    {
+        try
+        {
+            winrt::hstring localFolder = ApplicationData::Current().LocalFolder().Path();
+            return std::wstring(localFolder.c_str()) + L"\\demo_stitch.vfp";
+        }
+        catch (hresult_error const&)
+        {
+            wchar_t buffer[MAX_PATH];
+            DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, MAX_PATH);
+            std::wstring folder = (len > 0 && len < MAX_PATH) ? std::wstring(buffer) : L".";
+            folder += L"\\Image360";
+            CreateDirectoryW(folder.c_str(), nullptr);
+            return folder + L"\\demo_stitch.vfp";
+        }
+    }
 }
 
 namespace winrt::WindowsApp::implementation
@@ -148,8 +171,7 @@ namespace winrt::WindowsApp::implementation
             m_stitchThread.join();
         }
 
-        winrt::hstring localFolder = ApplicationData::Current().LocalFolder().Path();
-        std::wstring projectPath = std::wstring(localFolder.c_str()) + L"\\demo_stitch.vfp";
+        std::wstring projectPath = StitchProjectPath();
 
         // Deliberately minimal stand-in for real project creation (see this
         // plan's Global Constraints) - CreateProject is safe to call again
