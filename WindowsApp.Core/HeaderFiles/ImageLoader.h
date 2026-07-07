@@ -30,6 +30,10 @@ namespace WindowsApp::Core
         int height = 0;
         std::vector<unsigned short> cfaData; // one sample per pixel, raw sensor values
         CfaType cfaType = CfaType::UNKNOWN;
+        uint32_t filters = 0;   // LibRaw's CFA pattern encoding - needed by
+                                 // the GPU demosaic kernels' per-pixel
+                                 // color-channel lookup, not just cfaType
+                                 // classification
         unsigned blackLevel = 0;
         float camMul[4] = { 1.0f, 1.0f, 1.0f, 1.0f };  // per-channel WB multipliers
         float rgbCam[3][4] = {};                        // camera RGB -> sRGB matrix

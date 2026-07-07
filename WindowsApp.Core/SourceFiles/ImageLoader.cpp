@@ -303,6 +303,7 @@ namespace WindowsApp::Core
         size_t numPixels = static_cast<size_t>(output.width) * static_cast<size_t>(output.height);
         output.cfaData.assign(rawdata.raw_image, rawdata.raw_image + numPixels);
 
+        output.filters = idata.filters;
         output.blackLevel = color.black;
         for (int i = 0; i < 4; ++i)
         {
