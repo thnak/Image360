@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <optional>
+#include <cstdint>
 
 struct sqlite3;
 
@@ -30,6 +32,22 @@ namespace WindowsApp::Core
         bool AddInputImage(const std::wstring& filePath, const Homography& h);
         bool UpdateImageGain(int imageId, float gain);
         bool UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath);
+
+        // Tasks
+        bool CreateTasksIfAbsent(const std::vector<Task>& tasks);
+        std::vector<Task> GetTasksForStage(PipelineStage stage) const;
+        bool UpdateTaskStatus(int64_t taskId, TaskStatus status);
+        bool CommitTaskOutput(int64_t taskId, int64_t outputBlobId);
+        bool UpdateTaskCheckpoint(int64_t taskId, const std::string& checkpointJson);
+        int  ReclaimStaleRunningTasks(PipelineStage stage);
+
+        // Chunk contributors
+        bool SetChunkContributors(const std::string& chunkId, const std::vector<int>& imageIds);
+        std::vector<int> GetChunkContributors(const std::string& chunkId) const;
+
+        // Blob directory
+        int64_t AddBlobDirectoryEntry(const BlobDirectoryEntry& entry);
+        std::optional<BlobDirectoryEntry> GetBlobDirectoryEntry(int64_t blobId) const;
 
         // Accessors
         const std::vector<ChunkModel>& GetChunks() const { return m_chunks; }

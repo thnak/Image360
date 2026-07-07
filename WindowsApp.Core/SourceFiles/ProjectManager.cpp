@@ -5,6 +5,59 @@
 
 namespace WindowsApp::Core
 {
+    namespace
+    {
+        const char* ToString(PipelineStage stage)
+        {
+            switch (stage)
+            {
+            case PipelineStage::IDLE:            return "IDLE";
+            case PipelineStage::STAGE0_INGEST:   return "STAGE0_INGEST";
+            case PipelineStage::STAGE1_ALIGN:    return "STAGE1_ALIGN";
+            case PipelineStage::STAGE2_OPTIMIZE: return "STAGE2_OPTIMIZE";
+            case PipelineStage::STAGE3_RENDER:   return "STAGE3_RENDER";
+            case PipelineStage::COMPLETED:       return "COMPLETED";
+            case PipelineStage::CANCELLED:       return "CANCELLED";
+            case PipelineStage::FAILED:          return "FAILED";
+            }
+            return "IDLE";
+        }
+
+        PipelineStage ParsePipelineStage(const std::string& s)
+        {
+            if (s == "STAGE0_INGEST")   return PipelineStage::STAGE0_INGEST;
+            if (s == "STAGE1_ALIGN")    return PipelineStage::STAGE1_ALIGN;
+            if (s == "STAGE2_OPTIMIZE") return PipelineStage::STAGE2_OPTIMIZE;
+            if (s == "STAGE3_RENDER")   return PipelineStage::STAGE3_RENDER;
+            if (s == "COMPLETED")       return PipelineStage::COMPLETED;
+            if (s == "CANCELLED")       return PipelineStage::CANCELLED;
+            if (s == "FAILED")          return PipelineStage::FAILED;
+            return PipelineStage::IDLE;
+        }
+
+        const char* ToString(TaskStatus status)
+        {
+            switch (status)
+            {
+            case TaskStatus::PENDING:   return "PENDING";
+            case TaskStatus::RUNNING:   return "RUNNING";
+            case TaskStatus::COMPLETED: return "COMPLETED";
+            case TaskStatus::FAILED:    return "FAILED";
+            case TaskStatus::CANCELLED: return "CANCELLED";
+            }
+            return "PENDING";
+        }
+
+        TaskStatus ParseTaskStatus(const std::string& s)
+        {
+            if (s == "RUNNING")   return TaskStatus::RUNNING;
+            if (s == "COMPLETED") return TaskStatus::COMPLETED;
+            if (s == "FAILED")    return TaskStatus::FAILED;
+            if (s == "CANCELLED") return TaskStatus::CANCELLED;
+            return TaskStatus::PENDING;
+        }
+    }
+
     ProjectManager::ProjectManager() = default;
 
     ProjectManager::~ProjectManager()
@@ -289,6 +342,258 @@ namespace WindowsApp::Core
             }
         }
         return true;
+    }
+
+    bool ProjectManager::CreateTasksIfAbsent(const std::vector<Task>& tasks)
+    {
+        if (!m_db) return false;
+
+        const char* sql =
+            "INSERT OR IGNORE INTO tasks (stage, unit_kind, unit_key, status, attempt_count, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, strftime('%s','now'));";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+        bool ok = true;
+        for (const auto& task : tasks)
+        {
+            sqlite3_bind_text(stmt, 1, ToString(task.stage), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, task.unitKind.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 3, task.unitKey.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 4, ToString(task.status), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int(stmt, 5, task.attemptCount);
+
+            if (sqlite3_step(stmt) != SQLITE_DONE) ok = false;
+            sqlite3_reset(stmt);
+        }
+
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    std::vector<Task> ProjectManager::GetTasksForStage(PipelineStage stage) const
+    {
+        std::vector<Task> results;
+        if (!m_db) return results;
+
+        const char* sql =
+            "SELECT task_id, stage, unit_kind, unit_key, status, attempt_count, output_blob_id, checkpoint_json "
+            "FROM tasks WHERE stage = ? ORDER BY task_id;";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return results;
+
+        sqlite3_bind_text(stmt, 1, ToString(stage), -1, SQLITE_TRANSIENT);
+
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+        {
+            Task task;
+            task.taskId = sqlite3_column_int64(stmt, 0);
+            task.stage = ParsePipelineStage(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+            task.unitKind = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            task.unitKey = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+            task.status = ParseTaskStatus(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4)));
+            task.attemptCount = sqlite3_column_int(stmt, 5);
+
+            if (sqlite3_column_type(stmt, 6) != SQLITE_NULL)
+                task.outputBlobId = sqlite3_column_int64(stmt, 6);
+
+            if (const char* checkpoint = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7)))
+                task.checkpointJson = checkpoint;
+
+            results.push_back(std::move(task));
+        }
+
+        sqlite3_finalize(stmt);
+        return results;
+    }
+
+    bool ProjectManager::UpdateTaskStatus(int64_t taskId, TaskStatus status)
+    {
+        if (!m_db) return false;
+
+        const char* sql = "UPDATE tasks SET status = ?, updated_at = strftime('%s','now') WHERE task_id = ?;";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+        sqlite3_bind_text(stmt, 1, ToString(status), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, taskId);
+
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool ProjectManager::CommitTaskOutput(int64_t taskId, int64_t outputBlobId)
+    {
+        if (!m_db) return false;
+
+        const char* sql =
+            "UPDATE tasks SET status = 'COMPLETED', output_blob_id = ?, updated_at = strftime('%s','now') "
+            "WHERE task_id = ?;";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+        sqlite3_bind_int64(stmt, 1, outputBlobId);
+        sqlite3_bind_int64(stmt, 2, taskId);
+
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool ProjectManager::UpdateTaskCheckpoint(int64_t taskId, const std::string& checkpointJson)
+    {
+        if (!m_db) return false;
+
+        const char* sql = "UPDATE tasks SET checkpoint_json = ?, updated_at = strftime('%s','now') WHERE task_id = ?;";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+        sqlite3_bind_text(stmt, 1, checkpointJson.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, taskId);
+
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    int ProjectManager::ReclaimStaleRunningTasks(PipelineStage stage)
+    {
+        if (!m_db) return 0;
+
+        const char* sql = "UPDATE tasks SET status = 'PENDING' WHERE stage = ? AND status = 'RUNNING';";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+
+        sqlite3_bind_text(stmt, 1, ToString(stage), -1, SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+
+        return sqlite3_changes(m_db);
+    }
+
+    bool ProjectManager::SetChunkContributors(const std::string& chunkId, const std::vector<int>& imageIds)
+    {
+        if (!m_db) return false;
+
+        sqlite3_stmt* del = nullptr;
+        if (sqlite3_prepare_v2(m_db, "DELETE FROM chunk_contributors WHERE chunk_id = ?;", -1, &del, nullptr) != SQLITE_OK)
+            return false;
+        sqlite3_bind_text(del, 1, chunkId.c_str(), -1, SQLITE_TRANSIENT);
+        bool ok = sqlite3_step(del) == SQLITE_DONE;
+        sqlite3_finalize(del);
+        if (!ok) return false;
+
+        sqlite3_stmt* ins = nullptr;
+        if (sqlite3_prepare_v2(m_db, "INSERT INTO chunk_contributors (chunk_id, image_id) VALUES (?, ?);", -1, &ins, nullptr) != SQLITE_OK)
+            return false;
+
+        for (int imageId : imageIds)
+        {
+            sqlite3_bind_text(ins, 1, chunkId.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int(ins, 2, imageId);
+
+            if (sqlite3_step(ins) != SQLITE_DONE) ok = false;
+            sqlite3_reset(ins);
+        }
+
+        sqlite3_finalize(ins);
+        return ok;
+    }
+
+    std::vector<int> ProjectManager::GetChunkContributors(const std::string& chunkId) const
+    {
+        std::vector<int> results;
+        if (!m_db) return results;
+
+        const char* sql = "SELECT image_id FROM chunk_contributors WHERE chunk_id = ? ORDER BY image_id;";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return results;
+
+        sqlite3_bind_text(stmt, 1, chunkId.c_str(), -1, SQLITE_TRANSIENT);
+
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+            results.push_back(sqlite3_column_int(stmt, 0));
+
+        sqlite3_finalize(stmt);
+        return results;
+    }
+
+    int64_t ProjectManager::AddBlobDirectoryEntry(const BlobDirectoryEntry& entry)
+    {
+        if (!m_db) return 0;
+
+        const char* sql =
+            "INSERT INTO blob_directory (shard_file, offset, length, compressed_length, format_tag) "
+            "VALUES (?, ?, ?, ?, ?);";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+
+        int len = WideCharToMultiByte(CP_UTF8, 0, entry.shardFile.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        std::string utf8Shard(len - 1, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, entry.shardFile.c_str(), -1, utf8Shard.data(), len, nullptr, nullptr);
+
+        sqlite3_bind_text(stmt, 1, utf8Shard.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, entry.offset);
+        sqlite3_bind_int64(stmt, 3, entry.length);
+        if (entry.compressedLength.has_value())
+            sqlite3_bind_int64(stmt, 4, entry.compressedLength.value());
+        else
+            sqlite3_bind_null(stmt, 4);
+        sqlite3_bind_text(stmt, 5, entry.formatTag.c_str(), -1, SQLITE_TRANSIENT);
+
+        int64_t newId = 0;
+        if (sqlite3_step(stmt) == SQLITE_DONE)
+            newId = sqlite3_last_insert_rowid(m_db);
+
+        sqlite3_finalize(stmt);
+        return newId;
+    }
+
+    std::optional<BlobDirectoryEntry> ProjectManager::GetBlobDirectoryEntry(int64_t blobId) const
+    {
+        if (!m_db) return std::nullopt;
+
+        const char* sql =
+            "SELECT blob_id, shard_file, offset, length, compressed_length, format_tag "
+            "FROM blob_directory WHERE blob_id = ?;";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return std::nullopt;
+
+        sqlite3_bind_int64(stmt, 1, blobId);
+
+        std::optional<BlobDirectoryEntry> result;
+        if (sqlite3_step(stmt) == SQLITE_ROW)
+        {
+            BlobDirectoryEntry entry;
+            entry.blobId = sqlite3_column_int64(stmt, 0);
+
+            const wchar_t* shardFile = reinterpret_cast<const wchar_t*>(sqlite3_column_text16(stmt, 1));
+            if (shardFile) entry.shardFile = shardFile;
+
+            entry.offset = sqlite3_column_int64(stmt, 2);
+            entry.length = sqlite3_column_int64(stmt, 3);
+
+            if (sqlite3_column_type(stmt, 4) != SQLITE_NULL)
+                entry.compressedLength = sqlite3_column_int64(stmt, 4);
+
+            if (const char* formatTag = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5)))
+                entry.formatTag = formatTag;
+
+            result = std::move(entry);
+        }
+
+        sqlite3_finalize(stmt);
+        return result;
     }
 
     bool ProjectManager::ExecuteNonQuery(const std::string& sql)
