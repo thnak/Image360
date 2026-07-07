@@ -57,6 +57,34 @@ namespace WindowsApp::Core
                 status TEXT NOT NULL DEFAULT 'PENDING',
                 cache_path TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS tasks (
+                task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage TEXT NOT NULL,
+                unit_kind TEXT NOT NULL,
+                unit_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                output_blob_id INTEGER,
+                checkpoint_json TEXT,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(stage, unit_kind, unit_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS chunk_contributors (
+                chunk_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
+                PRIMARY KEY (chunk_id, image_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS blob_directory (
+                blob_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shard_file TEXT NOT NULL,
+                offset INTEGER NOT NULL,
+                length INTEGER NOT NULL,
+                compressed_length INTEGER,
+                format_tag TEXT NOT NULL
+            );
         )";
 
         if (!ExecuteNonQuery(schema))
@@ -125,6 +153,40 @@ namespace WindowsApp::Core
         }
 
         m_projectPath = dbPath;
+
+        // Ensure tables added after this project was first created exist too,
+        // so opening an older .vfp file never fails on a missing table.
+        const char* taskSchema = R"(
+            CREATE TABLE IF NOT EXISTS tasks (
+                task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage TEXT NOT NULL,
+                unit_kind TEXT NOT NULL,
+                unit_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                output_blob_id INTEGER,
+                checkpoint_json TEXT,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(stage, unit_kind, unit_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS chunk_contributors (
+                chunk_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
+                PRIMARY KEY (chunk_id, image_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS blob_directory (
+                blob_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shard_file TEXT NOT NULL,
+                offset INTEGER NOT NULL,
+                length INTEGER NOT NULL,
+                compressed_length INTEGER,
+                format_tag TEXT NOT NULL
+            );
+        )";
+        ExecuteNonQuery(taskSchema);
+
         LoadMetadata();
         LoadInputImages();
         LoadChunks();
