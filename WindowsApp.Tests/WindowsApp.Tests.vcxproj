@@ -73,6 +73,7 @@
   <ItemGroup>
     <ClCompile Include="UnitTests.cpp" />
     <ClCompile Include="ProjectManagerTaskTests.cpp" />
+    <ClCompile Include="PipelineDriverTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\WindowsApp.Core\WindowsApp.Core.vcxproj">
