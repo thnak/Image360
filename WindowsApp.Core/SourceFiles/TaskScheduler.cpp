@@ -23,10 +23,6 @@ namespace WindowsApp::Core
         // mid-stage after a crash must also reclaim stale RUNNING rows.
         m_projectManager.ReclaimStaleRunningTasks(stage);
 
-        auto executorIt = m_executors.find(stage);
-        if (executorIt == m_executors.end()) return false;
-        std::shared_ptr<ITaskExecutor> executor = executorIt->second;
-
         std::vector<Task> allTasks = m_projectManager.GetTasksForStage(stage);
         const size_t totalCount = allTasks.size();
 
@@ -37,6 +33,16 @@ namespace WindowsApp::Core
             if (task.status == TaskStatus::COMPLETED) ++completedCount;
             else pending.push_back(std::move(task));
         }
+
+        // A stage with nothing to dispatch trivially succeeds - it must
+        // not require a registered executor, since PipelineDriver calls
+        // RunStage for every stage in order, including ones with zero
+        // seeded tasks.
+        if (pending.empty()) return true;
+
+        auto executorIt = m_executors.find(stage);
+        if (executorIt == m_executors.end()) return false;
+        std::shared_ptr<ITaskExecutor> executor = executorIt->second;
 
         // std::list so in-flight Task objects have a stable address even
         // as this container grows - the async lambda below holds a raw
