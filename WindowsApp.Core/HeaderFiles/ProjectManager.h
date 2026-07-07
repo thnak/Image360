@@ -63,6 +63,16 @@ namespace WindowsApp::Core
         // per input image, exactly one STAGE2_OPTIMIZE/"ba_checkpoint"
         // task (unit_key = "global").
         bool SeedOptimizeTasks();
+
+        // Runs overlap culling (OverlapCulling.h) for every chunk,
+        // populates chunk_contributors, and seeds one
+        // STAGE3_RENDER/"chunk" task per chunk with at least one
+        // contributor - chunks with zero contributors get no task at
+        // all (unlike v1's ProcessChunk, which still dispatched and
+        // just logged "no images overlap"). Must be called after
+        // Optimize completes (needs final homographies) - PipelineDriver
+        // wires this timing, not this method itself.
+        bool SeedRenderTasks();
         bool UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath);
 
         // Tasks

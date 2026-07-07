@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "HeaderFiles/ProjectManager.h"
+#include "HeaderFiles/OverlapCulling.h"
 #include "sqlite3/sqlite3.h"
 #include <stdexcept>
 
@@ -452,6 +453,29 @@ namespace WindowsApp::Core
         baTask.unitKind = "ba_checkpoint";
         baTask.unitKey = "global";
         seeds.push_back(std::move(baTask));
+
+        return CreateTasksIfAbsent(seeds);
+    }
+
+    bool ProjectManager::SeedRenderTasks()
+    {
+        if (!m_db) return false;
+
+        std::vector<Task> seeds;
+        for (const auto& chunk : m_chunks)
+        {
+            std::vector<int> contributors = FindOverlappingImages(chunk, m_inputImages);
+            SetChunkContributors(chunk.id, contributors);
+
+            if (!contributors.empty())
+            {
+                Task task;
+                task.stage = PipelineStage::STAGE3_RENDER;
+                task.unitKind = "chunk";
+                task.unitKey = chunk.id;
+                seeds.push_back(std::move(task));
+            }
+        }
 
         return CreateTasksIfAbsent(seeds);
     }
