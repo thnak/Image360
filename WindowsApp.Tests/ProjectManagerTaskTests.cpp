@@ -149,5 +149,37 @@ namespace WindowsApp::Tests
             pm.CloseProject();
             DeleteFileW(path.c_str());
         }
+
+        TEST_METHOD(SeedAlignTasksSeedsAllPairsAndIsIdempotent)
+        {
+            using namespace WindowsApp::Core;
+            std::wstring path = MakeTempProjectPath(L"seedalign");
+            ProjectManager pm;
+            Assert::IsTrue(pm.CreateProject(path, 8192, 8192));
+
+            Assert::IsTrue(pm.AddInputImage(L"C:\\fake\\img1.dng", Homography{}, CfaType::BAYER));
+            Assert::IsTrue(pm.AddInputImage(L"C:\\fake\\img2.dng", Homography{}, CfaType::BAYER));
+            Assert::IsTrue(pm.AddInputImage(L"C:\\fake\\img3.dng", Homography{}, CfaType::BAYER));
+
+            Assert::IsTrue(pm.SeedAlignTasks());
+
+            auto tasks = pm.GetTasksForStage(PipelineStage::STAGE1_ALIGN);
+            int imageTasks = 0;
+            int pairTasks = 0;
+            for (const auto& task : tasks)
+            {
+                if (task.unitKind == "image") ++imageTasks;
+                else if (task.unitKind == "pair") ++pairTasks;
+            }
+            Assert::AreEqual(3, imageTasks);
+            Assert::AreEqual(3, pairTasks); // C(3,2) = 3
+
+            // Re-seeding must not duplicate.
+            Assert::IsTrue(pm.SeedAlignTasks());
+            Assert::AreEqual(size_t(6), pm.GetTasksForStage(PipelineStage::STAGE1_ALIGN).size());
+
+            pm.CloseProject();
+            DeleteFileW(path.c_str());
+        }
     };
 }

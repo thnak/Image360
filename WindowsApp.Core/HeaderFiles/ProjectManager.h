@@ -43,6 +43,14 @@ namespace WindowsApp::Core
         // Idempotent via CreateTasksIfAbsent's UNIQUE(stage, unit_kind,
         // unit_key) constraint.
         bool SeedIngestTasks();
+
+        // One STAGE1_ALIGN/"image" task per input image (feature
+        // extraction); one STAGE1_ALIGN/"pair" task per (i, j) with i < j
+        // over all input images (match + RANSAC) - all-pairs, an
+        // explicit O(n^2) scope cut documented in
+        // docs/superpowers/plans/2026-07-07-align-stage.md's Global
+        // Constraints.
+        bool SeedAlignTasks();
         bool UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath);
 
         // Tasks

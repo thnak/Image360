@@ -387,6 +387,36 @@ namespace WindowsApp::Core
         return CreateTasksIfAbsent(seeds);
     }
 
+    bool ProjectManager::SeedAlignTasks()
+    {
+        if (!m_db) return false;
+
+        std::vector<Task> seeds;
+        seeds.reserve(m_inputImages.size());
+        for (const auto& image : m_inputImages)
+        {
+            Task task;
+            task.stage = PipelineStage::STAGE1_ALIGN;
+            task.unitKind = "image";
+            task.unitKey = std::to_string(image.id);
+            seeds.push_back(std::move(task));
+        }
+
+        for (size_t i = 0; i < m_inputImages.size(); ++i)
+        {
+            for (size_t j = i + 1; j < m_inputImages.size(); ++j)
+            {
+                Task task;
+                task.stage = PipelineStage::STAGE1_ALIGN;
+                task.unitKind = "pair";
+                task.unitKey = std::to_string(m_inputImages[i].id) + ":" + std::to_string(m_inputImages[j].id);
+                seeds.push_back(std::move(task));
+            }
+        }
+
+        return CreateTasksIfAbsent(seeds);
+    }
+
     bool ProjectManager::UpdateChunkStatus(const std::string& chunkId, ChunkStatus status, const std::wstring& cachePath)
     {
         if (!m_db) return false;
