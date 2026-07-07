@@ -26,6 +26,28 @@ namespace winrt::WindowsApp::implementation
         void AdjustmentSlider_ValueChanged(
             winrt::Windows::Foundation::IInspectable const& sender,
             winrt::Microsoft::UI::Xaml::Controls::Primitives::RangeBaseValueChangedEventArgs const& args);
+
+        void StitchStartButton_Click(
+            winrt::Windows::Foundation::IInspectable const& sender,
+            winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
+
+        void StitchCancelButton_Click(
+            winrt::Windows::Foundation::IInspectable const& sender,
+            winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
+
+    private:
+        // Declared in this order - not the stop_source/jthread/Project/
+        // Driver order the plan doc sketches - because member destruction
+        // runs in REVERSE declaration order. m_stitchThread must be
+        // destroyed (std::jthread's destructor: request_stop() + join())
+        // before m_pipelineDriver/m_stitchProject are destroyed, or a
+        // still-running background thread would call into already-freed
+        // objects during MainWindow teardown. This is what makes
+        // window-close-mid-run safe with no extra shutdown handler.
+        WindowsApp::Core::ProjectManager m_stitchProject;
+        WindowsApp::Core::PipelineDriver m_pipelineDriver;
+        std::stop_source m_stitchStopSource;
+        std::jthread m_stitchThread;
     };
 }
 
