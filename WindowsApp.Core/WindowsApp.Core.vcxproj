@@ -72,6 +72,7 @@
     <ClInclude Include="HeaderFiles\ProjectManager.h" />
     <ClInclude Include="HeaderFiles\ImageLoader.h" />
     <ClInclude Include="HeaderFiles\ITaskExecutor.h" />
+    <ClInclude Include="HeaderFiles\TaskScheduler.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
   </ItemGroup>
@@ -83,6 +84,9 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="SourceFiles\ImageLoader.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\TaskScheduler.cpp">
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="sqlite3\sqlite3.c">
