@@ -4,6 +4,8 @@
 #include "MainWindow.g.cpp"
 #endif
 
+#include "ImageLoader.h"
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -163,16 +165,22 @@ namespace winrt::WindowsApp::implementation
         }
     }
 
-    void MainWindow::StitchStartButton_Click(
+    winrt::fire_and_forget MainWindow::StitchStartButton_Click(
         Windows::Foundation::IInspectable const& /* sender */,
         RoutedEventArgs const& /* args */)
     {
+        using ::WindowsApp::Core::CfaType;
+        using ::WindowsApp::Core::Homography;
+        using ::WindowsApp::Core::ImageMetadata;
         using ::WindowsApp::Core::PipelineStage;
+        using ::WindowsApp::Core::RawPlane;
         using ::WindowsApp::Core::Task;
+
+        auto lifetime{ get_strong() }; // keep `this` alive across co_await suspension
 
         StitchStartButton().IsEnabled(false);
         StitchCancelButton().IsEnabled(true);
-        StitchStatusText().Text(L"Starting stitch...");
+        StitchStatusText().Text(L"Pick RAW photos to stitch...");
         StitchProgressBar().Value(0);
 
         // A previous run has already finished (Start is disabled while one
@@ -183,39 +191,113 @@ namespace winrt::WindowsApp::implementation
             m_stitchThread.join();
         }
 
+        FileOpenPicker picker{ AppWindow().Id() };
+        picker.FileTypeFilter().Append(L".raf");
+        picker.FileTypeFilter().Append(L".cr2");
+        picker.FileTypeFilter().Append(L".nef");
+        picker.FileTypeFilter().Append(L".arw");
+        picker.FileTypeFilter().Append(L".dng");
+
+        auto pickedFiles{ co_await picker.PickMultipleFilesAsync() };
+        if (!pickedFiles || pickedFiles.Size() == 0)
+        {
+            StitchStartButton().IsEnabled(true);
+            StitchCancelButton().IsEnabled(false);
+            StitchStatusText().Text(L"No photos selected.");
+            co_return;
+        }
+
+        StitchStatusText().Text(L"Reading photo metadata...");
+
+        // Per-file LibRaw metadata/unpack reads run synchronously here on
+        // whatever thread resumes this coroutine (typically the UI
+        // thread) - a known limitation for large multi-file picks, not
+        // solved in this pass; the pipeline *run* itself (below) is what
+        // this plan's non-blocking guarantee actually covers.
+        struct PickedImage
+        {
+            std::wstring path;
+            CfaType cfaType;
+            int width;
+            int height;
+        };
+
+        std::vector<PickedImage> pickedImages;
+        for (auto const& file : pickedFiles)
+        {
+            std::wstring path(file.Path().c_str());
+
+            ::WindowsApp::Core::ImageLoader loader;
+            if (!loader.Open(path)) continue;
+
+            CfaType cfaType = CfaType::UNKNOWN;
+            int width = 0;
+            int height = 0;
+
+            RawPlane plane;
+            if (loader.UnpackRaw(plane))
+            {
+                cfaType = plane.cfaType;
+                width = plane.width;
+                height = plane.height;
+            }
+            else
+            {
+                ImageMetadata metadata;
+                if (loader.GetMetadata(metadata))
+                {
+                    width = metadata.width;
+                    height = metadata.height;
+                }
+            }
+
+            if (width <= 0 || height <= 0) continue;
+
+            pickedImages.push_back({ path, cfaType, width, height });
+        }
+
+        if (pickedImages.empty())
+        {
+            StitchStartButton().IsEnabled(true);
+            StitchCancelButton().IsEnabled(false);
+            StitchStatusText().Text(L"Could not read any of the selected photos.");
+            co_return;
+        }
+
+        int maxWidth = 0;
+        int maxHeight = 0;
+        for (const auto& img : pickedImages)
+        {
+            maxWidth = (std::max)(maxWidth, img.width);
+            maxHeight = (std::max)(maxHeight, img.height);
+        }
+
+        // Coarse pre-alignment canvas estimate, refined once real
+        // homographies exist (Align/Optimize) - not the final extent.
+        int totalWidth = maxWidth * static_cast<int>(pickedImages.size());
+        int totalHeight = maxHeight * static_cast<int>(pickedImages.size());
+
         std::wstring projectPath = StitchProjectPath();
 
-        // Deliberately minimal stand-in for real project creation (see this
-        // plan's Global Constraints). Delete any leftover demo project from
-        // a previous manual test run first - CreateProject alone is safe to
-        // call on an existing file (CREATE TABLE IF NOT EXISTS, never
-        // touches existing rows), but that also means a prior run's already-
-        // COMPLETED demo tasks would make every click after the first finish
-        // instantly via the (correct) resume/skip path, which is exactly
-        // what you don't want when manually testing "does this take long
-        // enough to see progress and try Cancel".
         m_stitchProject.CloseProject(); // release any handle from a prior click before deleting the file
         DeleteFileW(projectPath.c_str());
         DeleteFileW((projectPath + L"-wal").c_str());
         DeleteFileW((projectPath + L"-shm").c_str());
-        m_stitchProject.CreateProject(projectPath, 8192, 8192);
+        m_stitchProject.CreateProject(projectPath, totalWidth, totalHeight);
 
-        if (m_stitchProject.GetTasksForStage(PipelineStage::STAGE1_ALIGN).empty())
+        for (const auto& img : pickedImages)
         {
-            std::vector<Task> seeds;
-            for (int i = 0; i < kDemoTaskCount; ++i)
-            {
-                Task t;
-                t.stage = PipelineStage::STAGE1_ALIGN;
-                t.unitKind = "image";
-                t.unitKey = "demo_img_" + std::to_string(i);
-                seeds.push_back(t);
-            }
-            m_stitchProject.CreateTasksIfAbsent(seeds);
+            m_stitchProject.AddInputImage(img.path, Homography{}, img.cfaType);
         }
 
-        m_pipelineDriver.RegisterExecutor(
-            PipelineStage::STAGE1_ALIGN, std::make_shared<DemoStitchExecutor>(kDemoTaskDuration));
+        m_stitchProject.SeedIngestTasks();
+        m_stitchProject.SeedAlignTasks();
+        m_stitchProject.SeedOptimizeTasks();
+        // STAGE3_RENDER is deliberately not seeded here - it needs
+        // Optimize's final homographies; PipelineDriver::Run seeds it
+        // right before the Render stage (issue #42).
+
+        StitchStatusText().Text(L"Starting stitch...");
 
         m_stitchStopSource = std::stop_source();
         auto token = m_stitchStopSource.get_token();

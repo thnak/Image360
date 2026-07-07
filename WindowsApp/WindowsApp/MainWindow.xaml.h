@@ -27,7 +27,7 @@ namespace winrt::WindowsApp::implementation
             winrt::Windows::Foundation::IInspectable const& sender,
             winrt::Microsoft::UI::Xaml::Controls::Primitives::RangeBaseValueChangedEventArgs const& args);
 
-        void StitchStartButton_Click(
+        winrt::fire_and_forget StitchStartButton_Click(
             winrt::Windows::Foundation::IInspectable const& sender,
             winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
 
