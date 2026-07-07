@@ -78,11 +78,13 @@
     <ClInclude Include="HeaderFiles\CudaPipeline.h" />
     <ClInclude Include="HeaderFiles\median_stack.cuh" />
     <ClInclude Include="HeaderFiles\tensor_ops.cuh" />
+    <ClInclude Include="HeaderFiles\demosaic.cuh" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="SourceFiles\CudaPipeline.cpp" />
     <CudaCompile Include="SourceFiles\median_stack.cu" />
     <CudaCompile Include="SourceFiles\tensor_ops.cu" />
+    <CudaCompile Include="SourceFiles\demosaic.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

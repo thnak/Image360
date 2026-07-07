@@ -106,6 +106,20 @@ namespace WindowsApp { namespace Compute
             unsigned short* data, int numPixels, float gain);
 
         // =====================================================================
+        // Kernel 5: GPU Demosaic (RawIngest, docs/ARCHITECTURE.md SS4.1)
+        // =====================================================================
+        // cfaData: raw sensor plane, one sample per pixel (width*height)
+        // camMul: per-channel white balance multipliers (4 slots, LibRaw
+        //   convention - index 3 is the second green channel)
+        // rgbCam: camera RGB -> sRGB matrix, row-major 3x4
+        // filters: LibRaw's CFA pattern encoding
+        // rgbOut: pre-allocated, width*height*3 (RGB48)
+        ComputeResult DemosaicBayer(
+            const unsigned short* cfaData, int width, int height,
+            unsigned short blackLevel, const float camMul[4], const float rgbCam[3][4],
+            uint32_t filters, unsigned short* rgbOut);
+
+        // =====================================================================
         // Tensor Core Operations (requires SM 7.0+)
         // =====================================================================
 

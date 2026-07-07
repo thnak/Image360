@@ -1,6 +1,7 @@
 #include "HeaderFiles/CudaPipeline.h"
 #include "HeaderFiles/median_stack.cuh"
 #include "HeaderFiles/tensor_ops.cuh"
+#include "HeaderFiles/demosaic.cuh"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cstring>
@@ -495,6 +496,71 @@ namespace WindowsApp { namespace Compute
         CUDA_CHECK(cudaMemcpy(data, d_data, dataSize, cudaMemcpyDeviceToHost), m_lastError);
 
         cudaFree(d_data);
+        return ComputeResult::SUCCESS;
+    }
+
+    // =========================================================================
+    // Kernel 5: GPU Demosaic (RawIngest, docs/ARCHITECTURE.md SS4.1)
+    // =========================================================================
+    ComputeResult CudaPipeline::DemosaicBayer(
+        const unsigned short* cfaData, int width, int height,
+        unsigned short blackLevel, const float camMul[4], const float rgbCam[3][4],
+        uint32_t filters, unsigned short* rgbOut)
+    {
+        if (!m_ctx->initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!cfaData || !camMul || !rgbCam || !rgbOut) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (width <= 0 || height <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+
+        int numPixels = width * height;
+        size_t cfaSize = static_cast<size_t>(numPixels) * sizeof(unsigned short);
+        size_t rgbSize = static_cast<size_t>(numPixels) * 3 * sizeof(unsigned short);
+
+        unsigned short* d_cfa = nullptr;
+        unsigned short* d_rgbA = nullptr;
+        unsigned short* d_rgbB = nullptr;
+        float* d_rgbCam = nullptr;
+
+        CUDA_CHECK(cudaMalloc(&d_cfa, cfaSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_rgbA, rgbSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_rgbB, rgbSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_rgbCam, 12 * sizeof(float)), m_lastError);
+
+        CUDA_CHECK(cudaMemcpy(d_cfa, cfaData, cfaSize, cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(d_rgbCam, rgbCam, 12 * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
+
+        int threadsPerBlock = 256;
+        int blocks1D = (numPixels + threadsPerBlock - 1) / threadsPerBlock;
+        dim3 block2D(16, 16);
+        dim3 grid2D((width + block2D.x - 1) / block2D.x, (height + block2D.y - 1) / block2D.y);
+
+        WindowsApp::Compute::Kernels::BlackLevelSubtractKernel<<<blocks1D, threadsPerBlock>>>(
+            d_cfa, numPixels, blackLevel);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+
+        WindowsApp::Compute::Kernels::WhiteBalanceKernel<<<grid2D, block2D>>>(
+            d_cfa, width, height, camMul[0], camMul[1], camMul[2], camMul[3], filters);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+
+        WindowsApp::Compute::Kernels::DemosaicBayerKernel<<<grid2D, block2D>>>(
+            d_cfa, d_rgbA, width, height, filters);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+
+        WindowsApp::Compute::Kernels::ColorMatrixKernel<<<blocks1D, threadsPerBlock>>>(
+            d_rgbA, d_rgbB, numPixels, d_rgbCam);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+
+        WindowsApp::Compute::Kernels::ToneCurveKernel<<<blocks1D, threadsPerBlock>>>(
+            d_rgbB, d_rgbA, numPixels);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
+
+        CUDA_CHECK(cudaMemcpy(rgbOut, d_rgbA, rgbSize, cudaMemcpyDeviceToHost), m_lastError);
+
+        cudaFree(d_cfa);
+        cudaFree(d_rgbA);
+        cudaFree(d_rgbB);
+        cudaFree(d_rgbCam);
+
         return ComputeResult::SUCCESS;
     }
 
