@@ -84,6 +84,7 @@
     <ClInclude Include="HeaderFiles\tensor_ops.cuh" />
     <ClInclude Include="HeaderFiles\demosaic.cuh" />
     <ClInclude Include="HeaderFiles\NvJpegCodec.h" />
+    <ClInclude Include="HeaderFiles\features.cuh" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="SourceFiles\CudaPipeline.cpp" />
@@ -91,6 +92,7 @@
     <CudaCompile Include="SourceFiles\tensor_ops.cu" />
     <CudaCompile Include="SourceFiles\demosaic.cu" />
     <CudaCompile Include="SourceFiles\NvJpegCodec.cpp" />
+    <CudaCompile Include="SourceFiles\features.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

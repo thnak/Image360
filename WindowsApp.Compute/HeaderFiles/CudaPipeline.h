@@ -36,6 +36,18 @@ namespace WindowsApp { namespace Compute
         CUDA_ERROR = 5
     };
 
+    // Plain C++ types (no CUDA headers) shared between this public façade
+    // and the Kernels-namespace .cuh headers only CudaCompile-compiled
+    // sources consume - kept here, not in a .cuh, so plain-MSVC-compiled
+    // callers (WindowsApp.Core, WindowsApp.Tests) can use them too.
+    struct FeaturePoint
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+    };
+
+    using BriefDescriptor = uint64_t[4]; // 256-bit binary descriptor
+
     // Forward declaration for internal CUDA state
     struct CudaContext;
 
@@ -118,6 +130,16 @@ namespace WindowsApp { namespace Compute
             const unsigned short* cfaData, int width, int height,
             unsigned short blackLevel, const float camMul[4], const float rgbCam[3][4],
             uint32_t filters, unsigned short* rgbOut);
+
+        // =====================================================================
+        // Align: FAST detect + BRIEF describe (docs/ARCHITECTURE.md SS4.2)
+        // =====================================================================
+        // rgbImage: interleaved RGB8, width*height*3 (e.g. from
+        //   NvJpegCodec::Decode). outPoints/outDescriptors: caller-allocated,
+        //   maxPoints capacity. outCount: actual detections (<= maxPoints).
+        ComputeResult DetectAndDescribeFeatures(
+            const unsigned char* rgbImage, int width, int height,
+            FeaturePoint* outPoints, BriefDescriptor* outDescriptors, int* outCount, int maxPoints);
 
         // =====================================================================
         // Tensor Core Operations (requires SM 7.0+)

@@ -2,6 +2,7 @@
 #include "HeaderFiles/median_stack.cuh"
 #include "HeaderFiles/tensor_ops.cuh"
 #include "HeaderFiles/demosaic.cuh"
+#include "HeaderFiles/features.cuh"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cstring>
@@ -560,6 +561,77 @@ namespace WindowsApp { namespace Compute
         cudaFree(d_rgbA);
         cudaFree(d_rgbB);
         cudaFree(d_rgbCam);
+
+        return ComputeResult::SUCCESS;
+    }
+
+    // =========================================================================
+    // Align: FAST detect + BRIEF describe (docs/ARCHITECTURE.md SS4.2)
+    // =========================================================================
+    ComputeResult CudaPipeline::DetectAndDescribeFeatures(
+        const unsigned char* rgbImage, int width, int height,
+        FeaturePoint* outPoints, BriefDescriptor* outDescriptors, int* outCount, int maxPoints)
+    {
+        if (!m_ctx->initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!rgbImage || !outPoints || !outDescriptors || !outCount) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (width <= 0 || height <= 0 || maxPoints <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+
+        constexpr unsigned char kFastThreshold = 20;
+
+        int numPixels = width * height;
+        size_t rgbSize = static_cast<size_t>(numPixels) * 3;
+        size_t graySize = static_cast<size_t>(numPixels);
+
+        unsigned char* d_rgb = nullptr;
+        unsigned char* d_gray = nullptr;
+        FeaturePoint* d_points = nullptr;
+        BriefDescriptor* d_descriptors = nullptr;
+        int* d_count = nullptr;
+
+        CUDA_CHECK(cudaMalloc(&d_rgb, rgbSize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_gray, graySize), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_points, static_cast<size_t>(maxPoints) * sizeof(FeaturePoint)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_descriptors, static_cast<size_t>(maxPoints) * sizeof(BriefDescriptor)), m_lastError);
+        CUDA_CHECK(cudaMalloc(&d_count, sizeof(int)), m_lastError);
+
+        CUDA_CHECK(cudaMemcpy(d_rgb, rgbImage, rgbSize, cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemset(d_count, 0, sizeof(int)), m_lastError);
+
+        dim3 block(16, 16);
+        dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+
+        WindowsApp::Compute::Kernels::RgbToGrayKernel<<<grid, block>>>(d_rgb, d_gray, width, height);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+
+        WindowsApp::Compute::Kernels::FastDetectKernel<<<grid, block>>>(
+            d_gray, width, height, d_points, d_count, maxPoints, kFastThreshold);
+        CUDA_CHECK(cudaGetLastError(), m_lastError);
+        CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
+
+        int detectedCount = 0;
+        CUDA_CHECK(cudaMemcpy(&detectedCount, d_count, sizeof(int), cudaMemcpyDeviceToHost), m_lastError);
+        int clampedCount = std::min(detectedCount, maxPoints);
+
+        if (clampedCount > 0)
+        {
+            int threadsPerBlock = 256;
+            int blocks = (clampedCount + threadsPerBlock - 1) / threadsPerBlock;
+            WindowsApp::Compute::Kernels::BriefDescribeKernel<<<blocks, threadsPerBlock>>>(
+                d_gray, width, height, d_points, clampedCount, d_descriptors);
+            CUDA_CHECK(cudaGetLastError(), m_lastError);
+            CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
+
+            CUDA_CHECK(cudaMemcpy(outPoints, d_points, static_cast<size_t>(clampedCount) * sizeof(FeaturePoint), cudaMemcpyDeviceToHost), m_lastError);
+            CUDA_CHECK(cudaMemcpy(outDescriptors, d_descriptors, static_cast<size_t>(clampedCount) * sizeof(BriefDescriptor), cudaMemcpyDeviceToHost), m_lastError);
+        }
+
+        *outCount = clampedCount;
+
+        cudaFree(d_rgb);
+        cudaFree(d_gray);
+        cudaFree(d_points);
+        cudaFree(d_descriptors);
+        cudaFree(d_count);
 
         return ComputeResult::SUCCESS;
     }
