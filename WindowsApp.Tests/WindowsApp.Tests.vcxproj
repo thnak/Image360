@@ -75,6 +75,7 @@
     <ClCompile Include="ProjectManagerTaskTests.cpp" />
     <ClCompile Include="PipelineDriverTests.cpp" />
     <ClCompile Include="StorageEngineTests.cpp" />
+    <ClCompile Include="ImageLoaderUnpackRawTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\WindowsApp.Core\WindowsApp.Core.vcxproj">

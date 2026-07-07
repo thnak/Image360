@@ -1,6 +1,7 @@
 #pragma once
 #include "Types.h"
 #include <string>
+#include <vector>
 #include <memory>
 
 namespace WindowsApp::Core
@@ -18,6 +19,20 @@ namespace WindowsApp::Core
         float aperture = 0.0f;
         float focalLength = 0.0f;
         int orientation = 1; // EXIF orientation
+    };
+
+    // Result of unpack()-only access (no dcraw_process()) - the raw
+    // sensor plane plus just enough metadata to demosaic it on the GPU
+    // (docs/ARCHITECTURE.md SS4.1).
+    struct RawPlane
+    {
+        int width = 0;
+        int height = 0;
+        std::vector<unsigned short> cfaData; // one sample per pixel, raw sensor values
+        CfaType cfaType = CfaType::UNKNOWN;
+        unsigned blackLevel = 0;
+        float camMul[4] = { 1.0f, 1.0f, 1.0f, 1.0f };  // per-channel WB multipliers
+        float rgbCam[3][4] = {};                        // camera RGB -> sRGB matrix
     };
 
     class ImageLoader
@@ -47,6 +62,12 @@ namespace WindowsApp::Core
         // Decode a specific ROI (for Stage 3 tile processing)
         // x, y, width, height in pixel coordinates of the full image
         bool DecodeROI(int x, int y, int width, int height, PixelBuffer& output);
+
+        // Stops after LibRaw's unpack() (already done as part of Open())
+        // - no dcraw_process(). Must be called on an already-Open()'d
+        // file. Populates RawPlane::cfaType so callers can route
+        // Bayer-vs-exotic without duplicating that detection logic.
+        bool UnpackRaw(RawPlane& output);
 
         // Get the last error message
         std::wstring GetLastError() const;

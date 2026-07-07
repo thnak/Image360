@@ -279,6 +279,70 @@ namespace WindowsApp::Core
         return true;
     }
 
+    bool ImageLoader::UnpackRaw(RawPlane& output)
+    {
+        if (!m_impl->isOpen)
+        {
+            m_impl->SetError(L"No file is open.");
+            return false;
+        }
+
+        const auto& sizes = m_impl->processor.imgdata.sizes;
+        const auto& idata = m_impl->processor.imgdata.idata;
+        const auto& color = m_impl->processor.imgdata.color;
+        const auto& rawdata = m_impl->processor.imgdata.rawdata;
+
+        if (!rawdata.raw_image)
+        {
+            m_impl->SetError(L"No unpacked raw CFA plane available for this file.");
+            return false;
+        }
+
+        output.width = sizes.raw_width;
+        output.height = sizes.raw_height;
+        size_t numPixels = static_cast<size_t>(output.width) * static_cast<size_t>(output.height);
+        output.cfaData.assign(rawdata.raw_image, rawdata.raw_image + numPixels);
+
+        output.blackLevel = color.black;
+        for (int i = 0; i < 4; ++i)
+        {
+            output.camMul[i] = color.cam_mul[i];
+        }
+
+        // cam_xyz_coeff converts the camera's XYZ color matrix into a
+        // camera-RGB -> sRGB matrix (rgb_cam). Numeric correctness needs
+        // real-hardware verification, same standing caveat as every other
+        // GPU/RAW-numeric path in this plan.
+        double camXyz[4][3];
+        for (int i = 0; i < 4; ++i)
+        {
+            for (int j = 0; j < 3; ++j)
+            {
+                camXyz[i][j] = color.cam_xyz[i][j];
+            }
+        }
+        m_impl->processor.cam_xyz_coeff(output.rgbCam, camXyz);
+
+        if (idata.is_foveon)
+        {
+            output.cfaType = CfaType::FOVEON;
+        }
+        else if (idata.filters == 9)
+        {
+            output.cfaType = CfaType::X_TRANS;
+        }
+        else if (idata.filters != 0)
+        {
+            output.cfaType = CfaType::BAYER;
+        }
+        else
+        {
+            output.cfaType = CfaType::UNKNOWN;
+        }
+
+        return true;
+    }
+
     std::wstring ImageLoader::GetLastError() const
     {
         return m_impl->lastError;
