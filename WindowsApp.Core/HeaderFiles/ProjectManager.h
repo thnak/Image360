@@ -10,6 +10,13 @@ struct sqlite3;
 
 namespace WindowsApp::Core
 {
+    // VRAM-budget-driven chunk sizing (docs/ARCHITECTURE.md SS6, SS7.4).
+    // Free function, no Compute::GpuInfo/CUDA dependency - callers that
+    // have a Compute::GpuInfo (the project-creation UI, PipelineDriver
+    // setup) pass gpuInfo.totalMemory here before calling CreateProject.
+    // Thresholds match ARCHITECTURE.md SS7.4's example numbers exactly.
+    int RecommendedChunkSize(uint64_t totalVramBytes);
+
     struct InputImageModel
     {
         int id = 0;
@@ -26,7 +33,7 @@ namespace WindowsApp::Core
         ~ProjectManager();
 
         // Database operations
-        bool CreateProject(const std::wstring& dbPath, int totalWidth, int totalHeight);
+        bool CreateProject(const std::wstring& dbPath, int totalWidth, int totalHeight, int chunkSize = 4096);
         bool LoadProject(const std::wstring& dbPath);
         void CloseProject();
 

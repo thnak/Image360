@@ -85,7 +85,15 @@ namespace WindowsApp::Core
         CloseProject();
     }
 
-    bool ProjectManager::CreateProject(const std::wstring& dbPath, int totalWidth, int totalHeight)
+    int RecommendedChunkSize(uint64_t totalVramBytes)
+    {
+        constexpr uint64_t kGB = 1024ull * 1024 * 1024;
+        if (totalVramBytes >= 16ull * kGB) return 4096;
+        if (totalVramBytes >= 8ull * kGB) return 2048;
+        return 1024;
+    }
+
+    bool ProjectManager::CreateProject(const std::wstring& dbPath, int totalWidth, int totalHeight, int chunkSize)
     {
         CloseProject();
 
@@ -182,8 +190,9 @@ namespace WindowsApp::Core
         m_chunks.clear();
         m_inputImages.clear();
 
-        // Generate chunk grid (4096x4096 tiles)
-        const int chunkSize = 4096;
+        // Generate chunk grid (chunkSize x chunkSize tiles - VRAM-budget-
+        // derived by the caller via RecommendedChunkSize, defaulted to
+        // 4096 so every existing call site keeps compiling unchanged).
         for (int y = 0; y < totalHeight; y += chunkSize)
         {
             for (int x = 0; x < totalWidth; x += chunkSize)

@@ -181,5 +181,37 @@ namespace WindowsApp::Tests
             pm.CloseProject();
             DeleteFileW(path.c_str());
         }
+
+        TEST_METHOD(RecommendedChunkSizeThresholds)
+        {
+            using namespace WindowsApp::Core;
+            constexpr uint64_t kGB = 1024ull * 1024 * 1024;
+
+            Assert::AreEqual(1024, RecommendedChunkSize(4ull * kGB));
+            Assert::AreEqual(1024, RecommendedChunkSize(8ull * kGB - 1));
+            Assert::AreEqual(2048, RecommendedChunkSize(8ull * kGB));
+            Assert::AreEqual(2048, RecommendedChunkSize(16ull * kGB - 1));
+            Assert::AreEqual(4096, RecommendedChunkSize(16ull * kGB));
+            Assert::AreEqual(4096, RecommendedChunkSize(24ull * kGB));
+        }
+
+        TEST_METHOD(CreateProjectWithNonDefaultChunkSizeProducesCorrectlySizedChunks)
+        {
+            using namespace WindowsApp::Core;
+            std::wstring path = MakeTempProjectPath(L"chunksize");
+            ProjectManager pm;
+            Assert::IsTrue(pm.CreateProject(path, 2048, 2048, 1024));
+
+            auto chunks = pm.GetChunks();
+            Assert::AreEqual(size_t(4), chunks.size()); // 2x2 grid of 1024-px tiles
+            for (const auto& chunk : chunks)
+            {
+                Assert::AreEqual(1024, chunk.width);
+                Assert::AreEqual(1024, chunk.height);
+            }
+
+            pm.CloseProject();
+            DeleteFileW(path.c_str());
+        }
     };
 }
