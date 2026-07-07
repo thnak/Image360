@@ -115,7 +115,6 @@
     <ClCompile Include="src\postprocessing\dcraw_process.cpp" />
     <ClCompile Include="src\postprocessing\mem_image.cpp" />
     <ClCompile Include="src\postprocessing\postprocessing_aux.cpp" />
-    <ClCompile Include="src\postprocessing\postprocessing_ph.cpp" />
     <ClCompile Include="src\postprocessing\postprocessing_utils.cpp" />
     <ClCompile Include="src\postprocessing\postprocessing_utils_dcrdefs.cpp" />
     <ClCompile Include="src\preprocessing\ext_preprocess.cpp" />
@@ -138,7 +137,6 @@
     <ClCompile Include="src\write\apply_profile.cpp" />
     <ClCompile Include="src\write\file_write.cpp" />
     <ClCompile Include="src\write\tiff_writer.cpp" />
-    <ClCompile Include="src\write\write_ph.cpp" />
     <ClCompile Include="src\x3f\x3f_parse_process.cpp" />
     <ClCompile Include="src\x3f\x3f_utils_patched.cpp" />
   </ItemGroup>
