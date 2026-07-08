@@ -58,6 +58,11 @@ namespace WindowsApp::Core
         int attemptCount = 0;
         std::optional<int64_t> outputBlobId;
         std::string checkpointJson;
+        // Transient - never persisted to the DB (GetTasksForStage() et al.
+        // leave it default-empty). An executor's Execute(Task&, ...) can
+        // set this before returning false so the scheduler's failure
+        // callback/log has something more specific than "returned false".
+        std::string errorMessage;
     };
 
     struct BlobDirectoryEntry

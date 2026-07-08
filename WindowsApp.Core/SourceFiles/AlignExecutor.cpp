@@ -131,7 +131,11 @@ namespace WindowsApp::Core
 
     bool AlignExecutor::ExecuteFeatureExtraction(Task& task, CancellationToken /* token */)
     {
-        if (!m_cudaPipeline || !m_nvJpegCodec) return false;
+        if (!m_cudaPipeline || !m_nvJpegCodec)
+        {
+            task.errorMessage = "CudaPipeline or NvJpegCodec not initialized.";
+            return false;
+        }
 
         int imageId = 0;
         try
@@ -140,6 +144,7 @@ namespace WindowsApp::Core
         }
         catch (...)
         {
+            task.errorMessage = "unitKey '" + task.unitKey + "' is not a valid image id.";
             return false;
         }
 
@@ -152,20 +157,37 @@ namespace WindowsApp::Core
                 break;
             }
         }
-        if (!image) return false;
+        if (!image)
+        {
+            task.errorMessage = "No InputImageModel row for image id " + task.unitKey + ".";
+            return false;
+        }
 
         ImageLoader loader;
-        if (!loader.Open(image->file_path)) return false;
+        if (!loader.Open(image->file_path))
+        {
+            task.errorMessage = "ImageLoader::Open failed for the source file.";
+            return false;
+        }
 
         std::vector<unsigned char> jpegBytes;
-        if (!loader.GetEmbeddedPreviewJpeg(jpegBytes)) return false;
+        if (!loader.GetEmbeddedPreviewJpeg(jpegBytes))
+        {
+            std::wstring loaderError = loader.GetLastError();
+            task.errorMessage = "GetEmbeddedPreviewJpeg failed: " + std::string(loaderError.begin(), loaderError.end());
+            return false;
+        }
 
         unsigned char* decodedRgb = nullptr;
         int width = 0;
         int height = 0;
         Compute::ComputeResult decodeResult = m_nvJpegCodec->Decode(
             jpegBytes.data(), jpegBytes.size(), &decodedRgb, &width, &height);
-        if (decodeResult != Compute::ComputeResult::SUCCESS) return false;
+        if (decodeResult != Compute::ComputeResult::SUCCESS)
+        {
+            task.errorMessage = "NvJpegCodec::Decode failed: " + std::string(m_nvJpegCodec->GetLastError());
+            return false;
+        }
 
         std::vector<Compute::FeaturePoint> points(kMaxFeatures);
         std::vector<uint64_t> descriptorWords(static_cast<size_t>(kMaxFeatures) * 4);
@@ -178,15 +200,29 @@ namespace WindowsApp::Core
 
         m_nvJpegCodec->FreeDecoded(decodedRgb);
 
-        if (featureResult != Compute::ComputeResult::SUCCESS) return false;
+        if (featureResult != Compute::ComputeResult::SUCCESS)
+        {
+            task.errorMessage = "DetectAndDescribeFeatures failed: " + std::string(m_cudaPipeline->GetLastError());
+            return false;
+        }
 
         points.resize(detectedCount);
         descriptorWords.resize(static_cast<size_t>(detectedCount) * 4);
 
+        if (detectedCount == 0)
+        {
+            task.errorMessage = "DetectAndDescribeFeatures found 0 features in the embedded preview.";
+            return false;
+        }
+
         std::vector<uint8_t> blobBytes = SerializeFeatures(points, descriptorWords);
 
         auto blobId = m_storageEngine.WriteBlob(blobBytes.data(), blobBytes.size(), "features_brief256");
-        if (!blobId.has_value()) return false;
+        if (!blobId.has_value())
+        {
+            task.errorMessage = "StorageEngine::WriteBlob failed for the feature blob.";
+            return false;
+        }
 
         task.outputBlobId = blobId;
         return true;
@@ -194,26 +230,52 @@ namespace WindowsApp::Core
 
     bool AlignExecutor::ExecuteMatch(Task& task, CancellationToken /* token */)
     {
-        if (!m_cudaPipeline) return false;
+        if (!m_cudaPipeline)
+        {
+            task.errorMessage = "CudaPipeline not initialized.";
+            return false;
+        }
 
         int imageA = 0;
         int imageB = 0;
-        if (!ParseImagePair(task.unitKey, imageA, imageB)) return false;
+        if (!ParseImagePair(task.unitKey, imageA, imageB))
+        {
+            task.errorMessage = "unitKey '" + task.unitKey + "' is not a valid 'A:B' image pair.";
+            return false;
+        }
 
         auto blobIdA = FindFeatureBlobId(m_projectManager, imageA);
         auto blobIdB = FindFeatureBlobId(m_projectManager, imageB);
-        if (!blobIdA.has_value() || !blobIdB.has_value()) return false;
+        if (!blobIdA.has_value() || !blobIdB.has_value())
+        {
+            task.errorMessage = "Feature blob missing for image " +
+                std::string(!blobIdA.has_value() ? std::to_string(imageA) : std::to_string(imageB)) +
+                " (its 'image' Align task hasn't completed).";
+            return false;
+        }
 
         auto bytesA = m_storageEngine.ReadBlob(blobIdA.value());
         auto bytesB = m_storageEngine.ReadBlob(blobIdB.value());
-        if (!bytesA.has_value() || !bytesB.has_value()) return false;
+        if (!bytesA.has_value() || !bytesB.has_value())
+        {
+            task.errorMessage = "StorageEngine::ReadBlob failed for a feature blob.";
+            return false;
+        }
 
         std::vector<Compute::FeaturePoint> pointsA, pointsB;
         std::vector<uint64_t> descWordsA, descWordsB;
-        if (!DeserializeFeatures(bytesA.value(), pointsA, descWordsA)) return false;
-        if (!DeserializeFeatures(bytesB.value(), pointsB, descWordsB)) return false;
+        if (!DeserializeFeatures(bytesA.value(), pointsA, descWordsA) ||
+            !DeserializeFeatures(bytesB.value(), pointsB, descWordsB))
+        {
+            task.errorMessage = "DeserializeFeatures failed - corrupt/truncated feature blob.";
+            return false;
+        }
 
-        if (pointsA.empty() || pointsB.empty()) return false;
+        if (pointsA.empty() || pointsB.empty())
+        {
+            task.errorMessage = "One of the two images has 0 stored features.";
+            return false;
+        }
 
         std::vector<Compute::MatchResult> matches(kMaxMatches);
         int matchCount = 0;
@@ -221,8 +283,16 @@ namespace WindowsApp::Core
             reinterpret_cast<const Compute::BriefDescriptor*>(descWordsA.data()), static_cast<int>(pointsA.size()),
             reinterpret_cast<const Compute::BriefDescriptor*>(descWordsB.data()), static_cast<int>(pointsB.size()),
             matches.data(), &matchCount, kMaxMatches);
-        if (matchResult != Compute::ComputeResult::SUCCESS) return false;
-        if (matchCount < 4) return false; // not enough correspondences for a homography
+        if (matchResult != Compute::ComputeResult::SUCCESS)
+        {
+            task.errorMessage = "MatchFeatures failed: " + std::string(m_cudaPipeline->GetLastError());
+            return false;
+        }
+        if (matchCount < 4)
+        {
+            task.errorMessage = "Only " + std::to_string(matchCount) + " feature matches found (need >= 4).";
+            return false; // not enough correspondences for a homography
+        }
 
         std::vector<std::pair<Compute::FeaturePoint, Compute::FeaturePoint>> correspondences;
         correspondences.reserve(matchCount);
@@ -232,13 +302,21 @@ namespace WindowsApp::Core
         }
 
         RansacResult ransacResult = RunRansacHomography(*m_cudaPipeline, correspondences);
-        if (!ransacResult.success) return false;
+        if (!ransacResult.success)
+        {
+            task.errorMessage = "RANSAC homography estimation did not converge on a consensus.";
+            return false;
+        }
 
         // Image A stays the reference frame in this v1 pass - a
         // documented simplification (docs/superpowers/plans/
         // 2026-07-07-align-stage.md Task 6 Step 3); proper bundle-
         // adjustment-driven global alignment is Optimize's job.
-        if (!m_projectManager.UpdateHomography(imageB, ransacResult.homography)) return false;
+        if (!m_projectManager.UpdateHomography(imageB, ransacResult.homography))
+        {
+            task.errorMessage = "ProjectManager::UpdateHomography failed.";
+            return false;
+        }
 
         return true;
     }

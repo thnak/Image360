@@ -93,10 +93,14 @@ namespace WindowsApp::Core
                             // task.attemptCount is the total attempts made
                             // (TaskScheduler bumps it to the failing count
                             // before this callback fires), not an index.
+                            // task.errorMessage is only set by executors
+                            // that opt in (see ITaskExecutor.h) - falls
+                            // back to nothing rather than a placeholder.
                             m_onLog(L"Task failed permanently: stage=" + std::wstring(StageName(stage)) +
                                 L" unitKind=" + Widen(task.unitKind) +
                                 L" unitKey=" + Widen(task.unitKey) +
-                                L" attempts=" + std::to_wstring(task.attemptCount));
+                                L" attempts=" + std::to_wstring(task.attemptCount) +
+                                (task.errorMessage.empty() ? L"" : (L" reason=" + Widen(task.errorMessage))));
                         }
 
                         float overall = (static_cast<float>(i) + stageProgress) / static_cast<float>(kStageCount);
