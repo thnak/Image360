@@ -64,6 +64,54 @@ namespace WindowsApp { namespace Compute
             } \
         } while (0)
 
+    // RAII wrapper around a single cudaMalloc'd allocation. Guarantees the
+    // allocation is freed when the owning scope exits by any path -
+    // including the early `return` inside CUDA_CHECK - which raw
+    // cudaMalloc/cudaFree pairs at the end of a function do not.
+    namespace
+    {
+        template <typename T>
+        class CudaDeviceBuffer
+        {
+        public:
+            CudaDeviceBuffer() = default;
+            ~CudaDeviceBuffer() { Free(); }
+
+            CudaDeviceBuffer(const CudaDeviceBuffer&) = delete;
+            CudaDeviceBuffer& operator=(const CudaDeviceBuffer&) = delete;
+
+            CudaDeviceBuffer(CudaDeviceBuffer&& other) noexcept : m_ptr(other.m_ptr) { other.m_ptr = nullptr; }
+            CudaDeviceBuffer& operator=(CudaDeviceBuffer&& other) noexcept
+            {
+                if (this != &other)
+                {
+                    Free();
+                    m_ptr = other.m_ptr;
+                    other.m_ptr = nullptr;
+                }
+                return *this;
+            }
+
+            // Allocates `count` elements of T. Frees any prior allocation first.
+            cudaError_t Alloc(size_t count)
+            {
+                Free();
+                return cudaMalloc(reinterpret_cast<void**>(&m_ptr), count * sizeof(T));
+            }
+
+            void Free()
+            {
+                if (m_ptr) { cudaFree(m_ptr); m_ptr = nullptr; }
+            }
+
+            T* get() const { return m_ptr; }
+            operator T*() const { return m_ptr; }
+
+        private:
+            T* m_ptr = nullptr;
+        };
+    }
+
     CudaPipeline::CudaPipeline()
         : m_ctx(new CudaContext())
         , m_lastError{}
@@ -190,13 +238,13 @@ namespace WindowsApp { namespace Compute
         size_t srcSize = srcW * srcH * 3 * sizeof(unsigned short);
         size_t dstSize = dstW * dstH * 3 * sizeof(unsigned short);
 
-        unsigned short* d_src = nullptr;
-        unsigned short* d_dst = nullptr;
-        float* d_invH = nullptr;
+        CudaDeviceBuffer<unsigned short> d_src;
+        CudaDeviceBuffer<unsigned short> d_dst;
+        CudaDeviceBuffer<float> d_invH;
 
-        CUDA_CHECK(cudaMalloc(&d_src, srcSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_dst, dstSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_invH, 9 * sizeof(float)), m_lastError);
+        CUDA_CHECK(d_src.Alloc(static_cast<size_t>(srcW) * srcH * 3), m_lastError);
+        CUDA_CHECK(d_dst.Alloc(static_cast<size_t>(dstW) * dstH * 3), m_lastError);
+        CUDA_CHECK(d_invH.Alloc(9), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_src, srcData, srcSize, cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemcpy(d_invH, invH, 9 * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
@@ -213,11 +261,6 @@ namespace WindowsApp { namespace Compute
 
         // Copy result back
         CUDA_CHECK(cudaMemcpy(dstData, d_dst, dstSize, cudaMemcpyDeviceToHost), m_lastError);
-
-        // Cleanup
-        cudaFree(d_src);
-        cudaFree(d_dst);
-        cudaFree(d_invH);
 
         return ComputeResult::SUCCESS;
     }
@@ -240,16 +283,16 @@ namespace WindowsApp { namespace Compute
         size_t totalInputSize = numInputs * singleImageSize;
 
         // Allocate device memory for all inputs (flattened)
-        unsigned short* d_inputs = nullptr;
-        unsigned short* d_output = nullptr;
+        CudaDeviceBuffer<unsigned short> d_inputs;
+        CudaDeviceBuffer<unsigned short> d_output;
 
-        CUDA_CHECK(cudaMalloc(&d_inputs, totalInputSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_output, singleImageSize), m_lastError);
+        CUDA_CHECK(d_inputs.Alloc(static_cast<size_t>(numInputs) * numPixels), m_lastError);
+        CUDA_CHECK(d_output.Alloc(static_cast<size_t>(numPixels)), m_lastError);
 
         // Copy all input images to device
         for (int i = 0; i < numInputs; i++)
         {
-            CUDA_CHECK(cudaMemcpy(d_inputs + i * numPixels, inputs[i],
+            CUDA_CHECK(cudaMemcpy(d_inputs.get() + i * numPixels, inputs[i],
                                    singleImageSize, cudaMemcpyHostToDevice), m_lastError);
         }
 
@@ -265,10 +308,6 @@ namespace WindowsApp { namespace Compute
 
         // Copy result back
         CUDA_CHECK(cudaMemcpy(output, d_output, singleImageSize, cudaMemcpyDeviceToHost), m_lastError);
-
-        // Cleanup
-        cudaFree(d_inputs);
-        cudaFree(d_output);
 
         return ComputeResult::SUCCESS;
     }
@@ -291,25 +330,14 @@ namespace WindowsApp { namespace Compute
         // Allocate device memory for input images
         size_t imageSize = width * height * 3 * sizeof(unsigned short);
 
-        unsigned short* d_imgA = nullptr;
-        unsigned short* d_imgB = nullptr;
-        unsigned short* d_output = nullptr;
-
-        CUDA_CHECK(cudaMalloc(&d_imgA, imageSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_imgB, imageSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_output, imageSize), m_lastError);
-
-        CUDA_CHECK(cudaMemcpy(d_imgA, imgA, imageSize, cudaMemcpyHostToDevice), m_lastError);
-        CUDA_CHECK(cudaMemcpy(d_imgB, imgB, imageSize, cudaMemcpyHostToDevice), m_lastError);
-
         // Build Laplacian pyramids for both images
         // For simplicity, process each color channel separately
         // In production, this would be optimized to handle all 3 channels together
 
         struct PyramidLevel
         {
-            unsigned short* d_data;
-            int w, h;
+            CudaDeviceBuffer<unsigned short> d_data;
+            int w = 0, h = 0;
         };
 
         // Allocate pyramid levels for image A and B
@@ -323,10 +351,10 @@ namespace WindowsApp { namespace Compute
         // Allocate all levels
         for (int level = 0; level < numBands; level++)
         {
-            size_t levelSize = curW * curH * 3 * sizeof(unsigned short);
-            cudaMalloc(&pyramidA[level].d_data, levelSize);
-            cudaMalloc(&pyramidB[level].d_data, levelSize);
-            cudaMalloc(&blendedPyramid[level].d_data, levelSize);
+            size_t levelPixels = static_cast<size_t>(curW) * curH * 3;
+            CUDA_CHECK(pyramidA[level].d_data.Alloc(levelPixels), m_lastError);
+            CUDA_CHECK(pyramidB[level].d_data.Alloc(levelPixels), m_lastError);
+            CUDA_CHECK(blendedPyramid[level].d_data.Alloc(levelPixels), m_lastError);
             pyramidA[level].w = curW;
             pyramidA[level].h = curH;
             pyramidB[level].w = curW;
@@ -345,8 +373,8 @@ namespace WindowsApp { namespace Compute
         // Top level Laplacian = Gaussian[top] (no subtraction)
 
         // Copy images to level 0
-        cudaMemcpy(pyramidA[0].d_data, imgA, imageSize, cudaMemcpyHostToDevice);
-        cudaMemcpy(pyramidB[0].d_data, imgB, imageSize, cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMemcpy(pyramidA[0].d_data, imgA, imageSize, cudaMemcpyHostToDevice), m_lastError);
+        CUDA_CHECK(cudaMemcpy(pyramidB[0].d_data, imgB, imageSize, cudaMemcpyHostToDevice), m_lastError);
 
         // Build Gaussian pyramid by downsampling
         for (int level = 1; level < numBands; level++)
@@ -376,11 +404,11 @@ namespace WindowsApp { namespace Compute
             int h = pyramidA[level].h;
 
             // Allocate upsampled buffer
-            unsigned short* d_upsampledA = nullptr;
-            unsigned short* d_upsampledB = nullptr;
-            size_t upSize = w * h * 3 * sizeof(unsigned short);
-            cudaMalloc(&d_upsampledA, upSize);
-            cudaMalloc(&d_upsampledB, upSize);
+            CudaDeviceBuffer<unsigned short> d_upsampledA;
+            CudaDeviceBuffer<unsigned short> d_upsampledB;
+            size_t upPixels = static_cast<size_t>(w) * h * 3;
+            CUDA_CHECK(d_upsampledA.Alloc(upPixels), m_lastError);
+            CUDA_CHECK(d_upsampledB.Alloc(upPixels), m_lastError);
 
             dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
 
@@ -399,9 +427,6 @@ namespace WindowsApp { namespace Compute
 
             WindowsApp::Compute::Kernels::LaplacianSubtract<<<grid, block>>>(
                 pyramidB[level].d_data, d_upsampledB, pyramidB[level].d_data, w, h);
-
-            cudaFree(d_upsampledA);
-            cudaFree(d_upsampledB);
         }
 
         // Blend each Laplacian level (equal weight 50/50)
@@ -434,9 +459,9 @@ namespace WindowsApp { namespace Compute
             int w = pyramidA[level].w;
             int h = pyramidA[level].h;
 
-            unsigned short* d_upsampled = nullptr;
-            size_t upSize = w * h * 3 * sizeof(unsigned short);
-            cudaMalloc(&d_upsampled, upSize);
+            CudaDeviceBuffer<unsigned short> d_upsampled;
+            size_t upPixels = static_cast<size_t>(w) * h * 3;
+            CUDA_CHECK(d_upsampled.Alloc(upPixels), m_lastError);
 
             dim3 grid((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
 
@@ -449,23 +474,10 @@ namespace WindowsApp { namespace Compute
             WindowsApp::Compute::Kernels::LaplacianReconstruct<<<grid, block>>>(
                 blendedPyramid[level].d_data, d_upsampled,
                 blendedPyramid[level].d_data, w, h);
-
-            cudaFree(d_upsampled);
         }
 
         // Copy final result
         CUDA_CHECK(cudaMemcpy(output, blendedPyramid[0].d_data, imageSize, cudaMemcpyDeviceToHost), m_lastError);
-
-        // Cleanup
-        for (int level = 0; level < numBands; level++)
-        {
-            cudaFree(pyramidA[level].d_data);
-            cudaFree(pyramidB[level].d_data);
-            cudaFree(blendedPyramid[level].d_data);
-        }
-        cudaFree(d_imgA);
-        cudaFree(d_imgB);
-        cudaFree(d_output);
 
         return ComputeResult::SUCCESS;
     }
@@ -482,9 +494,9 @@ namespace WindowsApp { namespace Compute
         if (fabsf(gain - 1.0f) < 1e-6f) return ComputeResult::SUCCESS; // No-op for gain ~= 1.0
 
         size_t dataSize = numPixels * sizeof(unsigned short);
-        unsigned short* d_data = nullptr;
+        CudaDeviceBuffer<unsigned short> d_data;
 
-        CUDA_CHECK(cudaMalloc(&d_data, dataSize), m_lastError);
+        CUDA_CHECK(d_data.Alloc(static_cast<size_t>(numPixels)), m_lastError);
         CUDA_CHECK(cudaMemcpy(d_data, data, dataSize, cudaMemcpyHostToDevice), m_lastError);
 
         int threadsPerBlock = 256;
@@ -497,7 +509,6 @@ namespace WindowsApp { namespace Compute
 
         CUDA_CHECK(cudaMemcpy(data, d_data, dataSize, cudaMemcpyDeviceToHost), m_lastError);
 
-        cudaFree(d_data);
         return ComputeResult::SUCCESS;
     }
 
@@ -517,15 +528,15 @@ namespace WindowsApp { namespace Compute
         size_t cfaSize = static_cast<size_t>(numPixels) * sizeof(unsigned short);
         size_t rgbSize = static_cast<size_t>(numPixels) * 3 * sizeof(unsigned short);
 
-        unsigned short* d_cfa = nullptr;
-        unsigned short* d_rgbA = nullptr;
-        unsigned short* d_rgbB = nullptr;
-        float* d_rgbCam = nullptr;
+        CudaDeviceBuffer<unsigned short> d_cfa;
+        CudaDeviceBuffer<unsigned short> d_rgbA;
+        CudaDeviceBuffer<unsigned short> d_rgbB;
+        CudaDeviceBuffer<float> d_rgbCam;
 
-        CUDA_CHECK(cudaMalloc(&d_cfa, cfaSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_rgbA, rgbSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_rgbB, rgbSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_rgbCam, 12 * sizeof(float)), m_lastError);
+        CUDA_CHECK(d_cfa.Alloc(static_cast<size_t>(numPixels)), m_lastError);
+        CUDA_CHECK(d_rgbA.Alloc(static_cast<size_t>(numPixels) * 3), m_lastError);
+        CUDA_CHECK(d_rgbB.Alloc(static_cast<size_t>(numPixels) * 3), m_lastError);
+        CUDA_CHECK(d_rgbCam.Alloc(12), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_cfa, cfaData, cfaSize, cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemcpy(d_rgbCam, rgbCam, 12 * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
@@ -558,11 +569,6 @@ namespace WindowsApp { namespace Compute
 
         CUDA_CHECK(cudaMemcpy(rgbOut, d_rgbA, rgbSize, cudaMemcpyDeviceToHost), m_lastError);
 
-        cudaFree(d_cfa);
-        cudaFree(d_rgbA);
-        cudaFree(d_rgbB);
-        cudaFree(d_rgbCam);
-
         return ComputeResult::SUCCESS;
     }
 
@@ -583,17 +589,17 @@ namespace WindowsApp { namespace Compute
         size_t rgbSize = static_cast<size_t>(numPixels) * 3;
         size_t graySize = static_cast<size_t>(numPixels);
 
-        unsigned char* d_rgb = nullptr;
-        unsigned char* d_gray = nullptr;
-        FeaturePoint* d_points = nullptr;
-        BriefDescriptor* d_descriptors = nullptr;
-        int* d_count = nullptr;
+        CudaDeviceBuffer<unsigned char> d_rgb;
+        CudaDeviceBuffer<unsigned char> d_gray;
+        CudaDeviceBuffer<FeaturePoint> d_points;
+        CudaDeviceBuffer<BriefDescriptor> d_descriptors;
+        CudaDeviceBuffer<int> d_count;
 
-        CUDA_CHECK(cudaMalloc(&d_rgb, rgbSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_gray, graySize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_points, static_cast<size_t>(maxPoints) * sizeof(FeaturePoint)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_descriptors, static_cast<size_t>(maxPoints) * sizeof(BriefDescriptor)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_count, sizeof(int)), m_lastError);
+        CUDA_CHECK(d_rgb.Alloc(rgbSize), m_lastError);
+        CUDA_CHECK(d_gray.Alloc(graySize), m_lastError);
+        CUDA_CHECK(d_points.Alloc(static_cast<size_t>(maxPoints)), m_lastError);
+        CUDA_CHECK(d_descriptors.Alloc(static_cast<size_t>(maxPoints)), m_lastError);
+        CUDA_CHECK(d_count.Alloc(1), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_rgb, rgbImage, rgbSize, cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemset(d_count, 0, sizeof(int)), m_lastError);
@@ -628,12 +634,6 @@ namespace WindowsApp { namespace Compute
 
         *outCount = clampedCount;
 
-        cudaFree(d_rgb);
-        cudaFree(d_gray);
-        cudaFree(d_points);
-        cudaFree(d_descriptors);
-        cudaFree(d_count);
-
         return ComputeResult::SUCCESS;
     }
 
@@ -650,15 +650,15 @@ namespace WindowsApp { namespace Compute
         if (!descA || !descB || !outMatches || !outMatchCount) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
         if (countA <= 0 || countB <= 0 || maxMatches <= 0) { SetError("Invalid counts."); return ComputeResult::INVALID_PARAM; }
 
-        BriefDescriptor* d_descA = nullptr;
-        BriefDescriptor* d_descB = nullptr;
-        MatchResult* d_matches = nullptr;
-        int* d_matchCount = nullptr;
+        CudaDeviceBuffer<BriefDescriptor> d_descA;
+        CudaDeviceBuffer<BriefDescriptor> d_descB;
+        CudaDeviceBuffer<MatchResult> d_matches;
+        CudaDeviceBuffer<int> d_matchCount;
 
-        CUDA_CHECK(cudaMalloc(&d_descA, static_cast<size_t>(countA) * sizeof(BriefDescriptor)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_descB, static_cast<size_t>(countB) * sizeof(BriefDescriptor)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_matches, static_cast<size_t>(maxMatches) * sizeof(MatchResult)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_matchCount, sizeof(int)), m_lastError);
+        CUDA_CHECK(d_descA.Alloc(static_cast<size_t>(countA)), m_lastError);
+        CUDA_CHECK(d_descB.Alloc(static_cast<size_t>(countB)), m_lastError);
+        CUDA_CHECK(d_matches.Alloc(static_cast<size_t>(maxMatches)), m_lastError);
+        CUDA_CHECK(d_matchCount.Alloc(1), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_descA, descA, static_cast<size_t>(countA) * sizeof(BriefDescriptor), cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemcpy(d_descB, descB, static_cast<size_t>(countB) * sizeof(BriefDescriptor), cudaMemcpyHostToDevice), m_lastError);
@@ -682,11 +682,6 @@ namespace WindowsApp { namespace Compute
         }
         *outMatchCount = clampedCount;
 
-        cudaFree(d_descA);
-        cudaFree(d_descB);
-        cudaFree(d_matches);
-        cudaFree(d_matchCount);
-
         return ComputeResult::SUCCESS;
     }
 
@@ -704,15 +699,15 @@ namespace WindowsApp { namespace Compute
         size_t rgbSize = static_cast<size_t>(numPixels) * 3 * sizeof(unsigned short);
         size_t labSize = static_cast<size_t>(numPixels) * 3 * sizeof(float);
 
-        unsigned short* d_rgb = nullptr;
-        float* d_lab = nullptr;
-        double* d_sum = nullptr;
-        double* d_sumSq = nullptr;
+        CudaDeviceBuffer<unsigned short> d_rgb;
+        CudaDeviceBuffer<float> d_lab;
+        CudaDeviceBuffer<double> d_sum;
+        CudaDeviceBuffer<double> d_sumSq;
 
-        CUDA_CHECK(cudaMalloc(&d_rgb, rgbSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_lab, labSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_sum, 3 * sizeof(double)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_sumSq, 3 * sizeof(double)), m_lastError);
+        CUDA_CHECK(d_rgb.Alloc(static_cast<size_t>(numPixels) * 3), m_lastError);
+        CUDA_CHECK(d_lab.Alloc(static_cast<size_t>(numPixels) * 3), m_lastError);
+        CUDA_CHECK(d_sum.Alloc(3), m_lastError);
+        CUDA_CHECK(d_sumSq.Alloc(3), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_rgb, rgb, rgbSize, cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemset(d_sum, 0, 3 * sizeof(double)), m_lastError);
@@ -741,11 +736,6 @@ namespace WindowsApp { namespace Compute
             outStd[c] = sqrt((variance > 0.0) ? variance : 0.0);
         }
 
-        cudaFree(d_rgb);
-        cudaFree(d_lab);
-        cudaFree(d_sum);
-        cudaFree(d_sumSq);
-
         return ComputeResult::SUCCESS;
     }
 
@@ -762,19 +752,19 @@ namespace WindowsApp { namespace Compute
         size_t rgbSize = static_cast<size_t>(numPixels) * 3 * sizeof(unsigned short);
         size_t labSize = static_cast<size_t>(numPixels) * 3 * sizeof(float);
 
-        unsigned short* d_rgb = nullptr;
-        float* d_lab = nullptr;
-        double* d_srcMean = nullptr;
-        double* d_srcStd = nullptr;
-        double* d_refMean = nullptr;
-        double* d_refStd = nullptr;
+        CudaDeviceBuffer<unsigned short> d_rgb;
+        CudaDeviceBuffer<float> d_lab;
+        CudaDeviceBuffer<double> d_srcMean;
+        CudaDeviceBuffer<double> d_srcStd;
+        CudaDeviceBuffer<double> d_refMean;
+        CudaDeviceBuffer<double> d_refStd;
 
-        CUDA_CHECK(cudaMalloc(&d_rgb, rgbSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_lab, labSize), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_srcMean, 3 * sizeof(double)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_srcStd, 3 * sizeof(double)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_refMean, 3 * sizeof(double)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_refStd, 3 * sizeof(double)), m_lastError);
+        CUDA_CHECK(d_rgb.Alloc(static_cast<size_t>(numPixels) * 3), m_lastError);
+        CUDA_CHECK(d_lab.Alloc(static_cast<size_t>(numPixels) * 3), m_lastError);
+        CUDA_CHECK(d_srcMean.Alloc(3), m_lastError);
+        CUDA_CHECK(d_srcStd.Alloc(3), m_lastError);
+        CUDA_CHECK(d_refMean.Alloc(3), m_lastError);
+        CUDA_CHECK(d_refStd.Alloc(3), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_rgb, rgbInOut, rgbSize, cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemcpy(d_srcMean, srcMean, 3 * sizeof(double), cudaMemcpyHostToDevice), m_lastError);
@@ -797,13 +787,6 @@ namespace WindowsApp { namespace Compute
         CUDA_CHECK(cudaDeviceSynchronize(), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(rgbInOut, d_rgb, rgbSize, cudaMemcpyDeviceToHost), m_lastError);
-
-        cudaFree(d_rgb);
-        cudaFree(d_lab);
-        cudaFree(d_srcMean);
-        cudaFree(d_srcStd);
-        cudaFree(d_refMean);
-        cudaFree(d_refStd);
 
         return ComputeResult::SUCCESS;
     }
@@ -835,17 +818,17 @@ namespace WindowsApp { namespace Compute
         size_t sizeB = (size_t)batchSize * batchA_K * batchB_N;
         size_t sizeC = (size_t)batchSize * batchA_M * batchB_N;
 
-        __half* d_A_half = nullptr;
-        __half* d_B_half = nullptr;
-        float* d_C = nullptr;
-        float* d_A_float = nullptr;
-        float* d_B_float = nullptr;
+        CudaDeviceBuffer<__half> d_A_half;
+        CudaDeviceBuffer<__half> d_B_half;
+        CudaDeviceBuffer<float> d_C;
+        CudaDeviceBuffer<float> d_A_float;
+        CudaDeviceBuffer<float> d_B_float;
 
-        CUDA_CHECK(cudaMalloc(&d_A_half, sizeA * sizeof(__half)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_B_half, sizeB * sizeof(__half)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_C, sizeC * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_A_float, sizeA * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_B_float, sizeB * sizeof(float)), m_lastError);
+        CUDA_CHECK(d_A_half.Alloc(sizeA), m_lastError);
+        CUDA_CHECK(d_B_half.Alloc(sizeB), m_lastError);
+        CUDA_CHECK(d_C.Alloc(sizeC), m_lastError);
+        CUDA_CHECK(d_A_float.Alloc(sizeA), m_lastError);
+        CUDA_CHECK(d_B_float.Alloc(sizeB), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_A_float, A, sizeA * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemcpy(d_B_float, B, sizeB * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
@@ -875,12 +858,6 @@ namespace WindowsApp { namespace Compute
 
         CUDA_CHECK(cudaMemcpy(C, d_C, sizeC * sizeof(float), cudaMemcpyDeviceToHost), m_lastError);
 
-        cudaFree(d_A_half);
-        cudaFree(d_B_half);
-        cudaFree(d_C);
-        cudaFree(d_A_float);
-        cudaFree(d_B_float);
-
         return ComputeResult::SUCCESS;
     }
 
@@ -895,15 +872,15 @@ namespace WindowsApp { namespace Compute
         if (numPairs < 4) { SetError("Need at least 4 point correspondences."); return ComputeResult::INVALID_PARAM; }
 
         // Allocate device memory
-        float* d_pairs = nullptr;
-        float* d_AtA = nullptr;
-        float* d_AtA_copy = nullptr;
-        float* d_h = nullptr;
+        CudaDeviceBuffer<float> d_pairs;
+        CudaDeviceBuffer<float> d_AtA;
+        CudaDeviceBuffer<float> d_AtA_copy;
+        CudaDeviceBuffer<float> d_h;
 
-        CUDA_CHECK(cudaMalloc(&d_pairs, numPairs * 4 * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_AtA, 9 * 9 * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_AtA_copy, 9 * 9 * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_h, 9 * sizeof(float)), m_lastError);
+        CUDA_CHECK(d_pairs.Alloc(static_cast<size_t>(numPairs) * 4), m_lastError);
+        CUDA_CHECK(d_AtA.Alloc(9 * 9), m_lastError);
+        CUDA_CHECK(d_AtA_copy.Alloc(9 * 9), m_lastError);
+        CUDA_CHECK(d_h.Alloc(9), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_pairs, pointPairs, numPairs * 4 * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemset(d_AtA, 0, 9 * 9 * sizeof(float)), m_lastError);
@@ -932,10 +909,10 @@ namespace WindowsApp { namespace Compute
                 Atb[i] += a0[i] * xp + a1[i] * yp;
         }
 
-        float* d_AtA_ref = nullptr;
-        float* d_AtA_out = nullptr;
-        CUDA_CHECK(cudaMalloc(&d_AtA_ref, 9 * 9 * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_AtA_out, 9 * 9 * sizeof(float)), m_lastError);
+        CudaDeviceBuffer<float> d_AtA_ref;
+        CudaDeviceBuffer<float> d_AtA_out;
+        CUDA_CHECK(d_AtA_ref.Alloc(9 * 9), m_lastError);
+        CUDA_CHECK(d_AtA_out.Alloc(9 * 9), m_lastError);
         CUDA_CHECK(cudaMemcpy(d_AtA_ref, Atb, 9 * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
 
         // Solve via Cholesky on GPU
@@ -957,13 +934,6 @@ namespace WindowsApp { namespace Compute
                 homography[i] *= inv;
         }
 
-        cudaFree(d_pairs);
-        cudaFree(d_AtA);
-        cudaFree(d_AtA_copy);
-        cudaFree(d_h);
-        cudaFree(d_AtA_ref);
-        cudaFree(d_AtA_out);
-
         return ComputeResult::SUCCESS;
     }
 
@@ -982,17 +952,17 @@ namespace WindowsApp { namespace Compute
         size_t JtJ_size = (size_t)numParams * numParams;
 
         // Allocate device memory
-        __half* d_J_half = nullptr;
-        float* d_J = nullptr;
-        float* d_r = nullptr;
-        float* d_JtJ = nullptr;
-        float* d_Jtr = nullptr;
+        CudaDeviceBuffer<__half> d_J_half;
+        CudaDeviceBuffer<float> d_J;
+        CudaDeviceBuffer<float> d_r;
+        CudaDeviceBuffer<float> d_JtJ;
+        CudaDeviceBuffer<float> d_Jtr;
 
-        CUDA_CHECK(cudaMalloc(&d_J_half, J_size * sizeof(__half)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_J, J_size * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_r, numResiduals * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_JtJ, JtJ_size * sizeof(float)), m_lastError);
-        CUDA_CHECK(cudaMalloc(&d_Jtr, numParams * sizeof(float)), m_lastError);
+        CUDA_CHECK(d_J_half.Alloc(J_size), m_lastError);
+        CUDA_CHECK(d_J.Alloc(J_size), m_lastError);
+        CUDA_CHECK(d_r.Alloc(static_cast<size_t>(numResiduals)), m_lastError);
+        CUDA_CHECK(d_JtJ.Alloc(JtJ_size), m_lastError);
+        CUDA_CHECK(d_Jtr.Alloc(static_cast<size_t>(numParams)), m_lastError);
 
         CUDA_CHECK(cudaMemcpy(d_J, J, J_size * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
         CUDA_CHECK(cudaMemcpy(d_r, r, numResiduals * sizeof(float), cudaMemcpyHostToDevice), m_lastError);
@@ -1066,12 +1036,6 @@ namespace WindowsApp { namespace Compute
                 sum += L[k * numParams + i] * delta[k];
             delta[i] = (y[i] - sum) / L[i * numParams + i];
         }
-
-        cudaFree(d_J_half);
-        cudaFree(d_J);
-        cudaFree(d_r);
-        cudaFree(d_JtJ);
-        cudaFree(d_Jtr);
 
         return ComputeResult::SUCCESS;
     }

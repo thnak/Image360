@@ -24,7 +24,11 @@ namespace WindowsApp::Core
     private:
         ProjectManager& m_projectManager;
         std::unordered_map<PipelineStage, std::shared_ptr<ITaskExecutor>> m_executors;
-        static constexpr size_t kMaxInFlight = 4;
+        // Kept low because Render/Align/Optimize tasks each hold full-resolution
+        // GPU buffers for the task's lifetime (see CudaPipeline.cpp) - on an
+        // 8GB-class GPU, 4 concurrent full-resolution tasks was enough to
+        // exhaust VRAM and spill into slower shared system memory.
+        static constexpr size_t kMaxInFlight = 2;
         static constexpr int kMaxAttempts = 3;
     };
 }
