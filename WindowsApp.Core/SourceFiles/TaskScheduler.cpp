@@ -85,6 +85,7 @@ namespace WindowsApp::Core
                     m_projectManager.CommitTaskOutput(item.task.taskId, item.task.outputBlobId.value());
                 else
                     m_projectManager.UpdateTaskStatus(item.task.taskId, TaskStatus::COMPLETED);
+                item.task.status = TaskStatus::COMPLETED;
                 ++completedCount;
             }
             else
@@ -97,10 +98,14 @@ namespace WindowsApp::Core
                     retryTask.attemptCount = newAttemptCount;
                     retryTask.status = TaskStatus::PENDING;
                     pending.push_back(std::move(retryTask));
+                    item.task.status = TaskStatus::PENDING;
+                    item.task.attemptCount = newAttemptCount;
                 }
                 else
                 {
                     m_projectManager.UpdateTaskStatus(item.task.taskId, TaskStatus::FAILED);
+                    item.task.status = TaskStatus::FAILED;
+                    item.task.attemptCount = newAttemptCount;
                     anyFailedPermanently = true;
                 }
             }
