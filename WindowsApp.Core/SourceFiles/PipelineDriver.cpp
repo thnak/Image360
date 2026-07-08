@@ -7,6 +7,28 @@
 
 namespace WindowsApp::Core
 {
+    namespace
+    {
+        const wchar_t* StageName(PipelineStage stage)
+        {
+            switch (stage)
+            {
+            case PipelineStage::STAGE0_INGEST:   return L"Ingest";
+            case PipelineStage::STAGE1_ALIGN:    return L"Align";
+            case PipelineStage::STAGE2_OPTIMIZE: return L"Optimize";
+            case PipelineStage::STAGE3_RENDER:   return L"Render";
+            default:                             return L"?";
+            }
+        }
+
+        // unitKind/unitKey are ASCII ids (e.g. "pair", "img_2:img_9") -
+        // see Types.h's Task comment - so a byte-for-byte widen is safe.
+        std::wstring Widen(const std::string& s)
+        {
+            return std::wstring(s.begin(), s.end());
+        }
+    }
+
     void PipelineDriver::Initialize(ProgressCallback onProgress, LogCallback onLog)
     {
         m_onProgress = std::move(onProgress);
@@ -59,8 +81,21 @@ namespace WindowsApp::Core
             if (!alreadyComplete)
             {
                 bool ok = scheduler.RunStage(stage, token,
-                    [this, i](const Task&, float stageProgress)
+                    [this, i, stage](const Task& task, float stageProgress)
                     {
+                        // Executors only ever return a plain bool (see
+                        // ITaskExecutor.h) - there's no error string to
+                        // surface, but naming exactly which unit gave up
+                        // after exhausting its retries is still far more
+                        // actionable than the generic "stage failed".
+                        if (task.status == TaskStatus::FAILED && m_onLog)
+                        {
+                            m_onLog(L"Task failed permanently: stage=" + std::wstring(StageName(stage)) +
+                                L" unitKind=" + Widen(task.unitKind) +
+                                L" unitKey=" + Widen(task.unitKey) +
+                                L" attempts=" + std::to_wstring(task.attemptCount + 1));
+                        }
+
                         float overall = (static_cast<float>(i) + stageProgress) / static_cast<float>(kStageCount);
                         m_overallProgress.store(overall);
                         if (m_onProgress) m_onProgress(m_currentStage.load(), overall);
@@ -69,7 +104,12 @@ namespace WindowsApp::Core
                 if (!ok)
                 {
                     m_currentStage.store(token.stop_requested() ? PipelineStage::CANCELLED : PipelineStage::FAILED);
-                    if (m_onLog) m_onLog(L"Stage did not complete; stopping pipeline run.");
+                    if (m_onLog)
+                    {
+                        m_onLog(token.stop_requested()
+                            ? L"Pipeline cancelled during " + std::wstring(StageName(stage)) + L" stage."
+                            : L"Pipeline stopped: " + std::wstring(StageName(stage)) + L" stage did not complete.");
+                    }
                     return false;
                 }
             }
