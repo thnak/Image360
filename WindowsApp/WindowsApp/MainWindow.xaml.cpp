@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <ctime>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -62,6 +64,32 @@ namespace
             CreateDirectoryW(folder.c_str(), nullptr);
             return folder + L"\\demo_stitch.vfp";
         }
+    }
+
+    // Same file/format App::App()'s UnhandledException handler writes to -
+    // one place to check regardless of whether a run failed gracefully
+    // (this) or crashed outright (that). Pipeline log lines only ever
+    // reach the UI as a transient StitchStatusText string that the
+    // completion handler immediately overwrites with "Stitch failed.", so
+    // without this the reason is gone by the time the user can read it.
+    void AppendToStitchLog(const std::wstring& message)
+    {
+        wchar_t tempPath[MAX_PATH];
+        if (!GetTempPathW(MAX_PATH, tempPath)) return;
+
+        std::wstring logFilePath = std::wstring(tempPath) + L"WindowsApp.log";
+        std::wofstream logFile(logFilePath, std::ios::app);
+        if (!logFile.is_open()) return;
+
+        time_t now = time(nullptr);
+        wchar_t timeStr[26];
+        _wctime_s(timeStr, 26, &now);
+        std::wstring timeString(timeStr);
+        if (!timeString.empty() && timeString.back() == L'\n')
+        {
+            timeString.pop_back();
+        }
+        logFile << L"[" << timeString << L"] " << message << std::endl;
     }
 }
 
@@ -157,6 +185,7 @@ namespace winrt::WindowsApp::implementation
         StitchCancelButton().IsEnabled(true);
         StitchStatusText().Text(L"Pick RAW photos to stitch...");
         StitchProgressBar().Value(0);
+        m_lastStitchLogMessage.clear();
 
         // A previous run has already finished (Start is disabled while one
         // is active), but std::jthread stays joinable until explicitly
@@ -179,6 +208,7 @@ namespace winrt::WindowsApp::implementation
                 const char* errorMsg = m_cudaPipeline->GetLastError();
                 std::wstring wideError(errorMsg, errorMsg + strlen(errorMsg)); // ASCII-only error text
 
+                AppendToStitchLog(L"No compatible GPU found: " + wideError);
                 StitchStartButton().IsEnabled(true);
                 StitchCancelButton().IsEnabled(false);
                 StitchStatusText().Text(winrt::hstring{ L"No compatible GPU found: " } + winrt::hstring{ wideError });
@@ -188,6 +218,7 @@ namespace winrt::WindowsApp::implementation
             m_nvJpegCodec = std::make_shared<::WindowsApp::Compute::NvJpegCodec>();
             if (m_nvJpegCodec->Initialize() != ::WindowsApp::Compute::ComputeResult::SUCCESS)
             {
+                AppendToStitchLog(L"Failed to initialize the JPEG codec.");
                 StitchStartButton().IsEnabled(true);
                 StitchCancelButton().IsEnabled(false);
                 StitchStatusText().Text(L"Failed to initialize the JPEG codec.");
@@ -355,10 +386,12 @@ namespace winrt::WindowsApp::implementation
             },
             [weakThis, dispatcher](std::wstring const& message)
             {
+                AppendToStitchLog(message);
                 dispatcher.TryEnqueue([weakThis, message]
                 {
                     if (auto strongThis{ weakThis.get() })
                     {
+                        strongThis->m_lastStitchLogMessage = message;
                         strongThis->StitchStatusText().Text(winrt::hstring{ message });
                     }
                 });
@@ -366,18 +399,69 @@ namespace winrt::WindowsApp::implementation
 
         m_stitchThread = std::jthread([this, weakThis, dispatcher, token]()
         {
-            bool ok = m_pipelineDriver.Run(m_stitchProject, token);
+            bool ok = false;
+            std::wstring crashMessage;
+            // This runs on a raw std::jthread, entirely outside XAML's
+            // dispatch stack - App::UnhandledException never sees an
+            // exception thrown here, so without this catch it would hit
+            // std::terminate() and kill the process with zero log output,
+            // not even the crash-dialog/temp-log path other failures get.
+            try
+            {
+                ok = m_pipelineDriver.Run(m_stitchProject, token);
+            }
+            catch (hresult_error const& error)
+            {
+                crashMessage = L"Stitch thread threw: " + std::wstring(error.message().c_str());
+            }
+            catch (std::exception const& error)
+            {
+                std::string narrow = error.what();
+                crashMessage = L"Stitch thread threw: " + std::wstring(narrow.begin(), narrow.end());
+            }
+            catch (...)
+            {
+                crashMessage = L"Stitch thread threw an unrecognized exception.";
+            }
+            if (!crashMessage.empty())
+            {
+                AppendToStitchLog(crashMessage);
+            }
             bool wasCancelled = token.stop_requested();
 
-            dispatcher.TryEnqueue([weakThis, ok, wasCancelled]
+            dispatcher.TryEnqueue([weakThis, ok, wasCancelled, crashMessage]
             {
                 if (auto strongThis{ weakThis.get() })
                 {
                     strongThis->StitchStartButton().IsEnabled(true);
                     strongThis->StitchCancelButton().IsEnabled(false);
                     strongThis->StitchExportButton().IsEnabled(ok);
-                    strongThis->StitchStatusText().Text(
-                        ok ? L"Stitch completed." : (wasCancelled ? L"Stitch cancelled." : L"Stitch failed."));
+
+                    if (!crashMessage.empty())
+                    {
+                        strongThis->m_lastStitchLogMessage = crashMessage;
+                    }
+
+                    winrt::hstring statusText;
+                    if (ok)
+                    {
+                        statusText = L"Stitch completed.";
+                    }
+                    else if (wasCancelled)
+                    {
+                        statusText = L"Stitch cancelled.";
+                    }
+                    else if (!strongThis->m_lastStitchLogMessage.empty())
+                    {
+                        statusText = winrt::hstring{ L"Stitch failed: " } +
+                            winrt::hstring{ strongThis->m_lastStitchLogMessage };
+                    }
+                    else
+                    {
+                        statusText = L"Stitch failed. See %TEMP%\\WindowsApp.log for details.";
+                    }
+                    strongThis->StitchStatusText().Text(statusText);
+
                     if (ok)
                     {
                         strongThis->StitchProgressBar().Value(100.0);

@@ -54,6 +54,12 @@ namespace winrt::WindowsApp::implementation
         std::shared_ptr<::WindowsApp::Compute::CudaPipeline> m_cudaPipeline;
         std::shared_ptr<::WindowsApp::Compute::NvJpegCodec> m_nvJpegCodec;
         bool m_computeInitialized = false;
+        // Last message PipelineDriver's onLog callback delivered - the
+        // stitch-completion handler folds this into "Stitch failed." since
+        // the raw log line only ever lives in StitchStatusText for a
+        // moment before being overwritten. Only ever touched from the UI
+        // thread (both writers are DispatcherQueue::TryEnqueue closures).
+        std::wstring m_lastStitchLogMessage;
         std::stop_source m_stitchStopSource;
         std::jthread m_stitchThread;
         // Declared last for the same reverse-destruction-order reason as
