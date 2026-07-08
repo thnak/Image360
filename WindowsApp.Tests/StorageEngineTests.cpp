@@ -19,6 +19,21 @@ namespace WindowsApp::Tests
             wchar_t tempDir[MAX_PATH];
             GetTempPathW(MAX_PATH, tempDir);
             std::wstring dir = std::wstring(tempDir) + L"Image360Test_se_" + suffix;
+            // Remove any leftover from a prior failed run
+            WIN32_FIND_DATAW findData;
+            std::wstring pattern = dir + L"\\*";
+            HANDLE find = FindFirstFileW(pattern.c_str(), &findData);
+            if (find != INVALID_HANDLE_VALUE)
+            {
+                do
+                {
+                    std::wstring name = findData.cFileName;
+                    if (name != L"." && name != L"..")
+                        DeleteFileW((dir + L"\\" + name).c_str());
+                } while (FindNextFileW(find, &findData));
+                FindClose(find);
+                RemoveDirectoryW(dir.c_str());
+            }
             CreateDirectoryW(dir.c_str(), nullptr);
             return dir;
         }

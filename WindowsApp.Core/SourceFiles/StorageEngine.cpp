@@ -151,7 +151,7 @@ namespace WindowsApp::Core
 
         std::wstring path = m_projectDirectory + L"\\" + entry->shardFile;
         HANDLE handle = CreateFileW(
-            path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+            path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle == INVALID_HANDLE_VALUE) return std::nullopt;
 
