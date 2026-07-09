@@ -1,64 +1,29 @@
 #pragma once
 
+#if defined(_MSC_VER)
 #ifdef WINDOWSAPPCOMPUTE_EXPORTS
 #define COMPUTE_API __declspec(dllexport)
 #else
 #define COMPUTE_API __declspec(dllimport)
 #endif
+#elif defined(__GNUC__)
+#define COMPUTE_API __attribute__((visibility("default")))
+#else
+#define COMPUTE_API
+#endif
 
 #include <cstdint>
 #include <cstddef>
 
+#include "ComputeTypes.h"
+#include "IComputeBackend.h"
+
 namespace WindowsApp { namespace Compute
 {
-    // GPU device information
-    struct GpuInfo
-    {
-        int deviceId = -1;
-        char name[256] = {};
-        size_t totalMemory = 0;
-        size_t freeMemory = 0;
-        int computeMajor = 0;
-        int computeMinor = 0;
-        int maxThreadsPerBlock = 0;
-        int multiProcessorCount = 0;
-        bool hasTensorCores = false;  // Volta (SM 7.0+) or Ampere (SM 8.0+)
-    };
-
-    // Result codes
-    enum class ComputeResult
-    {
-        SUCCESS = 0,
-        NO_GPU = 1,
-        INVALID_PARAM = 2,
-        OUT_OF_MEMORY = 3,
-        KERNEL_LAUNCH_FAILED = 4,
-        CUDA_ERROR = 5
-    };
-
-    // Plain C++ types (no CUDA headers) shared between this public façade
-    // and the Kernels-namespace .cuh headers only CudaCompile-compiled
-    // sources consume - kept here, not in a .cuh, so plain-MSVC-compiled
-    // callers (WindowsApp.Core, WindowsApp.Tests) can use them too.
-    struct FeaturePoint
-    {
-        float x = 0.0f;
-        float y = 0.0f;
-    };
-
-    using BriefDescriptor = uint64_t[4]; // 256-bit binary descriptor
-
-    struct MatchResult
-    {
-        int indexA = 0;
-        int indexB = 0;
-        int hammingDistance = 0;
-    };
-
     // Forward declaration for internal CUDA state
     struct CudaContext;
 
-    class COMPUTE_API CudaPipeline
+    class COMPUTE_API CudaPipeline : public IComputeBackend
     {
     public:
         CudaPipeline();
@@ -69,12 +34,12 @@ namespace WindowsApp { namespace Compute
         CudaPipeline& operator=(const CudaPipeline&) = delete;
 
         // Initialize CUDA context, query GPU info
-        ComputeResult Initialize();
-        void Shutdown();
-        bool IsInitialized() const;
+        ComputeResult Initialize() override;
+        void Shutdown() override;
+        bool IsInitialized() const override;
 
         // Get GPU info after initialization
-        GpuInfo GetGpuInfo() const;
+        GpuInfo GetGpuInfo() const override;
 
         // =====================================================================
         // Kernel 1: Perspective Warp (backward mapping with inverse homography)
@@ -88,7 +53,7 @@ namespace WindowsApp { namespace Compute
         ComputeResult WarpPerspective(
             const unsigned short* srcData, int srcW, int srcH,
             unsigned short* dstData, int dstW, int dstH,
-            const float* homography, int offsetX, int offsetY);
+            const float* homography, int offsetX, int offsetY) override;
 
         // =====================================================================
         // Kernel 2: Median Stack with Sigma-Clipping
@@ -101,7 +66,7 @@ namespace WindowsApp { namespace Compute
         ComputeResult MedianStack(
             const unsigned short** inputs, int numInputs,
             unsigned short* output, int width, int height,
-            float sigmaThreshold = 2.0f);
+            float sigmaThreshold = 2.0f) override;
 
         // =====================================================================
         // Kernel 3: Multi-Band Blending (Laplacian Pyramid)
@@ -122,7 +87,7 @@ namespace WindowsApp { namespace Compute
         // numPixels: total pixel count (width * height * channels)
         // gain: multiplicative gain factor
         ComputeResult ApplyGain(
-            unsigned short* data, int numPixels, float gain);
+            unsigned short* data, int numPixels, float gain) override;
 
         // =====================================================================
         // Kernel 5: GPU Demosaic (RawIngest, docs/ARCHITECTURE.md SS4.1)
@@ -136,7 +101,7 @@ namespace WindowsApp { namespace Compute
         ComputeResult DemosaicBayer(
             const unsigned short* cfaData, int width, int height,
             unsigned short blackLevel, const float camMul[4], const float rgbCam[3][4],
-            uint32_t filters, unsigned short* rgbOut);
+            uint32_t filters, unsigned short* rgbOut) override;
 
         // =====================================================================
         // Align: FAST detect + BRIEF describe (docs/ARCHITECTURE.md SS4.2)
@@ -146,7 +111,7 @@ namespace WindowsApp { namespace Compute
         //   maxPoints capacity. outCount: actual detections (<= maxPoints).
         ComputeResult DetectAndDescribeFeatures(
             const unsigned char* rgbImage, int width, int height,
-            FeaturePoint* outPoints, BriefDescriptor* outDescriptors, int* outCount, int maxPoints);
+            FeaturePoint* outPoints, BriefDescriptor* outDescriptors, int* outCount, int maxPoints) override;
 
         // =====================================================================
         // Align: Brute-force descriptor matching (docs/ARCHITECTURE.md SS4.2)
@@ -158,20 +123,20 @@ namespace WindowsApp { namespace Compute
             const BriefDescriptor* descA, int countA,
             const BriefDescriptor* descB, int countB,
             MatchResult* outMatches, int* outMatchCount, int maxMatches,
-            float ratioThreshold = 0.75f);
+            float ratioThreshold = 0.75f) override;
 
         // =====================================================================
         // Optimize: Reinhard color transfer (docs/ARCHITECTURE.md SS4.3)
         // =====================================================================
         // outMean/outStd: 3 doubles (L, a, b channels).
         ComputeResult ComputeLabStats(
-            const unsigned short* rgb, int width, int height, double outMean[3], double outStd[3]);
+            const unsigned short* rgb, int width, int height, double outMean[3], double outStd[3]) override;
 
         // rgbInOut: width*height*3, modified in place.
         ComputeResult ApplyReinhardColorTransfer(
             unsigned short* rgbInOut, int width, int height,
             const double srcMean[3], const double srcStd[3],
-            const double refMean[3], const double refStd[3]);
+            const double refMean[3], const double refStd[3]) override;
 
         // =====================================================================
         // Tensor Core Operations (requires SM 7.0+)
@@ -204,7 +169,7 @@ namespace WindowsApp { namespace Compute
             int numResiduals, int numParams, float lambda);
 
         // Get last error string
-        const char* GetLastError() const;
+        const char* GetLastError() const override;
 
     private:
         CudaContext* m_ctx;

@@ -51,9 +51,13 @@ namespace winrt::WindowsApp::implementation
         ::WindowsApp::Core::ProjectManager m_stitchProject;
         ::WindowsApp::Core::StorageEngine m_stitchStorage;
         ::WindowsApp::Core::PipelineDriver m_pipelineDriver;
-        std::shared_ptr<::WindowsApp::Compute::CudaPipeline> m_cudaPipeline;
-        std::shared_ptr<::WindowsApp::Compute::NvJpegCodec> m_nvJpegCodec;
+        // Concrete type is CudaPipeline or CpuComputeBackend, picked at
+        // runtime by ComputeBackendFactory::SelectComputeBackend() - see
+        // its call site for why (no GPU should abort the whole app).
+        std::shared_ptr<::WindowsApp::Compute::IComputeBackend> m_cudaPipeline;
+        std::shared_ptr<::WindowsApp::Compute::IImageCodec> m_nvJpegCodec;
         bool m_computeInitialized = false;
+        size_t m_computeMaxInFlight = 2;
         // Last message PipelineDriver's onLog callback delivered - the
         // stitch-completion handler folds this into "Stitch failed." since
         // the raw log line only ever lives in StitchStatusText for a

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "HeaderFiles/RansacHomography.h"
+#include "HeaderFiles/HomographyMath.h"
 #include <random>
 #include <cmath>
 #include <limits>
@@ -24,7 +25,6 @@ namespace WindowsApp::Core
     }
 
     RansacResult RunRansacHomography(
-        Compute::CudaPipeline& cudaPipeline,
         const std::vector<std::pair<Compute::FeaturePoint, Compute::FeaturePoint>>& correspondences,
         int iterations, float inlierThresholdPx)
     {
@@ -62,9 +62,7 @@ namespace WindowsApp::Core
             }
 
             Homography candidate;
-            Compute::ComputeResult computeResult =
-                cudaPipeline.TensorEstimateHomography(pointPairs, candidate.h.data(), 4);
-            if (computeResult != Compute::ComputeResult::SUCCESS) continue;
+            if (!SolveHomographyDlt(pointPairs, 4, candidate.h.data())) continue;
 
             int inlierCount = 0;
             for (const auto& corr : correspondences)

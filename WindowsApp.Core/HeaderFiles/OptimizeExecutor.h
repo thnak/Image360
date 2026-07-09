@@ -2,8 +2,8 @@
 #include "ITaskExecutor.h"
 #include "ProjectManager.h"
 #include "StorageEngine.h"
-#include "CudaPipeline.h"
-#include "NvJpegCodec.h"
+#include "IComputeBackend.h"
+#include "IImageCodec.h"
 #include <memory>
 
 namespace WindowsApp::Core
@@ -16,8 +16,8 @@ namespace WindowsApp::Core
     {
     public:
         OptimizeExecutor(ProjectManager& projectManager, StorageEngine& storageEngine,
-                          std::shared_ptr<Compute::CudaPipeline> cudaPipeline,
-                          std::shared_ptr<Compute::NvJpegCodec> nvJpegCodec);
+                          std::shared_ptr<Compute::IComputeBackend> cudaPipeline,
+                          std::shared_ptr<Compute::IImageCodec> nvJpegCodec);
 
         bool Execute(Task& task, CancellationToken token) override;
 
@@ -28,7 +28,7 @@ namespace WindowsApp::Core
 
         ProjectManager& m_projectManager;
         StorageEngine& m_storageEngine;
-        std::shared_ptr<Compute::CudaPipeline> m_cudaPipeline;
-        std::shared_ptr<Compute::NvJpegCodec> m_nvJpegCodec;
+        std::shared_ptr<Compute::IComputeBackend> m_cudaPipeline;
+        std::shared_ptr<Compute::IImageCodec> m_nvJpegCodec;
     };
 }

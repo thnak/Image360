@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "HeaderFiles/BundleAdjustment.h"
+#include "HeaderFiles/LinearSolve.h"
 #include <sstream>
 #include <cmath>
 #include <cstring>
@@ -139,7 +140,6 @@ namespace WindowsApp::Core
     }
 
     LmStepResult RunOneLmIteration(
-        Compute::CudaPipeline& cudaPipeline,
         const std::vector<int>& nonReferenceImageIds,
         const std::vector<BaCorrespondence>& correspondences,
         const BaCheckpoint& current)
@@ -193,24 +193,20 @@ namespace WindowsApp::Core
         }
 
         std::vector<float> delta(numParams, 0.0f);
-        Compute::ComputeResult solveResult = cudaPipeline.TensorSolveNormalEquations(
+        bool solved = SolveNormalEquationsLm(
             jacobian.data(), baseResiduals.data(), delta.data(), numResiduals, numParams, current.lambda);
 
-        if (solveResult != Compute::ComputeResult::SUCCESS)
+        if (!solved)
         {
             // Couldn't solve this step - not converged, the caller
             // dispatches another iteration against the same checkpoint.
             return result;
         }
 
-        // NOTE on sign: CudaPipeline::TensorSolveNormalEquations's own
-        // doc comment says it solves "JtJ * delta = -Jtr", but its
-        // actual (pre-existing, shipped) implementation computes
-        // Jtr = J^T*r directly and solves JtJ*delta = Jtr with no
-        // negation applied anywhere - i.e. delta is (JtJ)^-1 * Jtr, not
-        // its negation. Standard Gauss-Newton/LM minimizes ||r||^2 via
-        // params -= (JtJ)^-1 * Jtr, so this code subtracts delta to
-        // match the method's actual behavior, not its doc comment.
+        // NOTE on sign: SolveNormalEquationsLm solves JtJ*delta = Jtr with
+        // no negation applied - i.e. delta is (JtJ)^-1 * Jtr, not its
+        // negation. Standard Gauss-Newton/LM minimizes ||r||^2 via
+        // params -= (JtJ)^-1 * Jtr, so this code subtracts delta to match.
         std::vector<float> candidateParams = current.parameters;
         for (int p = 0; p < numParams; ++p)
         {

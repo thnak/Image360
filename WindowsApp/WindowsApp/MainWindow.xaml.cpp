@@ -6,6 +6,7 @@
 
 #include "ImageLoader.h"
 #include "PanoramaExporter.h"
+#include "ComputeBackendFactory.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -197,33 +198,18 @@ namespace winrt::WindowsApp::implementation
 
         // Lazily initialize the engine objects once per session (not per
         // run) - avoids paying CUDA init cost if the user never clicks
-        // Start Stitch, and this is the first place in the shipping UI a
-        // missing/incompatible GPU becomes a real, user-visible failure
-        // mode rather than a demo that never touched CUDA at all.
+        // Start Stitch. SelectComputeBackend() tries CudaPipeline first and
+        // falls back to CpuComputeBackend (AVX-512/AVX2/scalar) if no
+        // compatible GPU is found, so a missing/incompatible GPU no longer
+        // aborts the run - only a genuinely broken environment (e.g. the
+        // CPU JPEG codec failing to initialize, extremely rare) would.
         if (!m_computeInitialized)
         {
-            m_cudaPipeline = std::make_shared<::WindowsApp::Compute::CudaPipeline>();
-            if (m_cudaPipeline->Initialize() != ::WindowsApp::Compute::ComputeResult::SUCCESS)
-            {
-                const char* errorMsg = m_cudaPipeline->GetLastError();
-                std::wstring wideError(errorMsg, errorMsg + strlen(errorMsg)); // ASCII-only error text
-
-                AppendToStitchLog(L"No compatible GPU found: " + wideError);
-                StitchStartButton().IsEnabled(true);
-                StitchCancelButton().IsEnabled(false);
-                StitchStatusText().Text(winrt::hstring{ L"No compatible GPU found: " } + winrt::hstring{ wideError });
-                co_return;
-            }
-
-            m_nvJpegCodec = std::make_shared<::WindowsApp::Compute::NvJpegCodec>();
-            if (m_nvJpegCodec->Initialize() != ::WindowsApp::Compute::ComputeResult::SUCCESS)
-            {
-                AppendToStitchLog(L"Failed to initialize the JPEG codec.");
-                StitchStartButton().IsEnabled(true);
-                StitchCancelButton().IsEnabled(false);
-                StitchStatusText().Text(L"Failed to initialize the JPEG codec.");
-                co_return;
-            }
+            auto selection = ::WindowsApp::SelectComputeBackend();
+            m_cudaPipeline = selection.backend;
+            m_nvJpegCodec = selection.codec;
+            m_computeMaxInFlight = selection.recommendedMaxInFlight;
+            AppendToStitchLog(selection.statusMessage);
 
             m_computeInitialized = true;
         }
@@ -395,7 +381,8 @@ namespace winrt::WindowsApp::implementation
                         strongThis->StitchStatusText().Text(winrt::hstring{ message });
                     }
                 });
-            });
+            },
+            m_computeMaxInFlight);
 
         m_stitchThread = std::jthread([this, weakThis, dispatcher, token]()
         {

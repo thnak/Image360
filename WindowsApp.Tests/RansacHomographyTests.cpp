@@ -1,16 +1,18 @@
 #include "CppUnitTest.h"
 #include "RansacHomography.h"
 #include <cmath>
+#include <random>
+#include <vector>
 
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 
 namespace WindowsApp::Tests
 {
-    // Covers docs/superpowers/plans/2026-07-07-align-stage.md Task 5:
-    // only ReprojectionError is testable without a GPU -
-    // RunRansacHomography's orchestration needs
-    // CudaPipeline::TensorEstimateHomography and is only exercised
-    // end-to-end via AlignExecutor on real hardware.
+    // Covers docs/superpowers/plans/2026-07-07-align-stage.md Task 5.
+    // RunRansacHomography now solves via HomographyMath's portable CPU
+    // DLT (no CudaPipeline/GPU involved at all - see the CPU compute
+    // backend work), so it's fully testable here, not just
+    // ReprojectionError.
     TEST_CLASS(RansacHomographyTests)
     {
     public:
@@ -66,6 +68,86 @@ namespace WindowsApp::Tests
 
             float error = ReprojectionError(degenerate, src, dst);
             Assert::IsTrue(error > 1e6f); // sentinel "very large", not NaN/inf-crash
+        }
+
+        TEST_METHOD(RunRansacHomographyRecoversKnownTranslation)
+        {
+            using namespace WindowsApp::Core;
+            using namespace WindowsApp::Compute;
+
+            // x' = x + 5, y' = y + 7 - simple, exactly-representable
+            // homography so the recovered result should match tightly.
+            Homography trueH;
+            trueH.h = { 1.0f, 0.0f, 5.0f,
+                        0.0f, 1.0f, 7.0f,
+                        0.0f, 0.0f, 1.0f };
+
+            std::mt19937 rng(123);
+            std::uniform_real_distribution<float> coord(0.0f, 500.0f);
+
+            std::vector<std::pair<FeaturePoint, FeaturePoint>> correspondences;
+            for (int i = 0; i < 20; ++i)
+            {
+                FeaturePoint src{ coord(rng), coord(rng) };
+                FeaturePoint dst{ src.x + 5.0f, src.y + 7.0f };
+                correspondences.emplace_back(src, dst);
+            }
+
+            RansacResult result = RunRansacHomography(correspondences, 200, 1.0f);
+
+            Assert::IsTrue(result.success);
+            Assert::AreEqual(20, result.inlierCount);
+            Assert::IsTrue(std::fabs(result.homography.h[2] - 5.0f) < 0.5f);
+            Assert::IsTrue(std::fabs(result.homography.h[5] - 7.0f) < 0.5f);
+        }
+
+        TEST_METHOD(RunRansacHomographyRejectsOutliers)
+        {
+            using namespace WindowsApp::Core;
+            using namespace WindowsApp::Compute;
+
+            Homography trueH;
+            trueH.h = { 1.0f, 0.0f, 5.0f,
+                        0.0f, 1.0f, 7.0f,
+                        0.0f, 0.0f, 1.0f };
+
+            std::mt19937 rng(456);
+            std::uniform_real_distribution<float> coord(0.0f, 500.0f);
+
+            std::vector<std::pair<FeaturePoint, FeaturePoint>> correspondences;
+            for (int i = 0; i < 20; ++i)
+            {
+                FeaturePoint src{ coord(rng), coord(rng) };
+                FeaturePoint dst{ src.x + 5.0f, src.y + 7.0f };
+                correspondences.emplace_back(src, dst);
+            }
+            // 5 gross outliers mixed in - RANSAC should still find the
+            // 20-point consensus, not get pulled toward these.
+            for (int i = 0; i < 5; ++i)
+            {
+                correspondences.emplace_back(FeaturePoint{ coord(rng), coord(rng) }, FeaturePoint{ coord(rng), coord(rng) });
+            }
+
+            RansacResult result = RunRansacHomography(correspondences, 500, 1.0f);
+
+            Assert::IsTrue(result.success);
+            Assert::IsTrue(result.inlierCount >= 20);
+            Assert::IsTrue(std::fabs(result.homography.h[2] - 5.0f) < 0.5f);
+            Assert::IsTrue(std::fabs(result.homography.h[5] - 7.0f) < 0.5f);
+        }
+
+        TEST_METHOD(RunRansacHomographyFailsWithFewerThanFourCorrespondences)
+        {
+            using namespace WindowsApp::Core;
+            using namespace WindowsApp::Compute;
+
+            std::vector<std::pair<FeaturePoint, FeaturePoint>> correspondences = {
+                { FeaturePoint{ 0.0f, 0.0f }, FeaturePoint{ 5.0f, 7.0f } },
+                { FeaturePoint{ 1.0f, 1.0f }, FeaturePoint{ 6.0f, 8.0f } },
+            };
+
+            RansacResult result = RunRansacHomography(correspondences);
+            Assert::IsFalse(result.success);
         }
     };
 }

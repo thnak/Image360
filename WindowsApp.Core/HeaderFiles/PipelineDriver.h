@@ -16,7 +16,12 @@ namespace WindowsApp::Core
         using ProgressCallback = std::function<void(PipelineStage stage, float overallProgress)>;
         using LogCallback = std::function<void(const std::wstring&)>;
 
-        void Initialize(ProgressCallback onProgress, LogCallback onLog);
+        // maxInFlight default (2) matches TaskScheduler's own GPU-oriented
+        // default - callers on a CPU backend should pass a core-count-
+        // derived value instead (CPU kernels are single-threaded
+        // internally, so all parallelism comes from this in-flight
+        // window).
+        void Initialize(ProgressCallback onProgress, LogCallback onLog, size_t maxInFlight = 2);
         void RegisterExecutor(PipelineStage stage, std::shared_ptr<ITaskExecutor> executor);
 
         // Drives STAGE0_INGEST -> STAGE1_ALIGN -> STAGE2_OPTIMIZE ->
@@ -36,6 +41,7 @@ namespace WindowsApp::Core
         std::unordered_map<PipelineStage, std::shared_ptr<ITaskExecutor>> m_executors;
         ProgressCallback m_onProgress;
         LogCallback m_onLog;
+        size_t m_maxInFlight = 2;
         std::atomic<PipelineStage> m_currentStage{ PipelineStage::IDLE };
         std::atomic<float> m_overallProgress{ 0.0f };
     };

@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "HeaderFiles/ProjectManager.h"
 #include "HeaderFiles/OverlapCulling.h"
+#include "HeaderFiles/TextEncoding.h"
 #include "sqlite3/sqlite3.h"
 #include <stdexcept>
 
@@ -94,14 +95,20 @@ namespace WindowsApp::Core
         return 1024;
     }
 
+    int RecommendedChunkSizeForCpu(uint64_t totalRamBytes)
+    {
+        constexpr uint64_t kGB = 1024ull * 1024 * 1024;
+        if (totalRamBytes >= 32ull * kGB) return 4096;
+        if (totalRamBytes >= 16ull * kGB) return 2048;
+        return 1024;
+    }
+
     bool ProjectManager::CreateProject(const std::wstring& dbPath, int totalWidth, int totalHeight, int chunkSize)
     {
         CloseProject();
 
         // Convert wide path to UTF-8 for SQLite
-        int len = WideCharToMultiByte(CP_UTF8, 0, dbPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Path(len - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, dbPath.c_str(), -1, utf8Path.data(), len, nullptr, nullptr);
+        std::string utf8Path = WideToUtf8(dbPath);
 
         int rc = sqlite3_open(utf8Path.c_str(), &m_db);
         if (rc != SQLITE_OK)
@@ -225,9 +232,7 @@ namespace WindowsApp::Core
     {
         CloseProject();
 
-        int len = WideCharToMultiByte(CP_UTF8, 0, dbPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Path(len - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, dbPath.c_str(), -1, utf8Path.data(), len, nullptr, nullptr);
+        std::string utf8Path = WideToUtf8(dbPath);
 
         int rc = sqlite3_open(utf8Path.c_str(), &m_db);
         if (rc != SQLITE_OK)
@@ -302,9 +307,7 @@ namespace WindowsApp::Core
     {
         if (!m_db) return false;
 
-        int len = WideCharToMultiByte(CP_UTF8, 0, filePath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Path(len - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, filePath.c_str(), -1, utf8Path.data(), len, nullptr, nullptr);
+        std::string utf8Path = WideToUtf8(filePath);
 
         char sql[1024];
         snprintf(sql, sizeof(sql),
@@ -493,9 +496,7 @@ namespace WindowsApp::Core
         case ChunkStatus::FAILED:     statusStr = "FAILED"; break;
         }
 
-        int len = WideCharToMultiByte(CP_UTF8, 0, cachePath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Cache(len - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, cachePath.c_str(), -1, utf8Cache.data(), len, nullptr, nullptr);
+        std::string utf8Cache = WideToUtf8(cachePath);
 
         char sql[1024];
         snprintf(sql, sizeof(sql),
@@ -710,9 +711,7 @@ namespace WindowsApp::Core
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
 
-        int len = WideCharToMultiByte(CP_UTF8, 0, entry.shardFile.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Shard(len - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, entry.shardFile.c_str(), -1, utf8Shard.data(), len, nullptr, nullptr);
+        std::string utf8Shard = WideToUtf8(entry.shardFile);
 
         sqlite3_bind_text(stmt, 1, utf8Shard.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 2, entry.offset);
@@ -753,10 +752,7 @@ namespace WindowsApp::Core
             const char* shardFileUtf8 = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
             if (shardFileUtf8)
             {
-                int len = MultiByteToWideChar(CP_UTF8, 0, shardFileUtf8, -1, nullptr, 0);
-                std::wstring shardFile(len - 1, L'\0');
-                MultiByteToWideChar(CP_UTF8, 0, shardFileUtf8, -1, shardFile.data(), len);
-                entry.shardFile = shardFile;
+                entry.shardFile = Utf8ToWide(shardFileUtf8);
             }
 
             entry.offset = sqlite3_column_int64(stmt, 2);
@@ -840,10 +836,7 @@ namespace WindowsApp::Core
                 const char* cachePathUtf8 = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
                 if (cachePathUtf8)
                 {
-                    int len = MultiByteToWideChar(CP_UTF8, 0, cachePathUtf8, -1, nullptr, 0);
-                    std::wstring cachePath(len - 1, L'\0');
-                    MultiByteToWideChar(CP_UTF8, 0, cachePathUtf8, -1, cachePath.data(), len);
-                    chunk.cache_path = cachePath;
+                    chunk.cache_path = Utf8ToWide(cachePathUtf8);
                 }
 
                 m_chunks.push_back(std::move(chunk));
@@ -869,10 +862,7 @@ namespace WindowsApp::Core
                 const char* pathUtf8 = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
                 if (pathUtf8)
                 {
-                    int len = MultiByteToWideChar(CP_UTF8, 0, pathUtf8, -1, nullptr, 0);
-                    std::wstring path(len - 1, L'\0');
-                    MultiByteToWideChar(CP_UTF8, 0, pathUtf8, -1, path.data(), len);
-                    img.file_path = path;
+                    img.file_path = Utf8ToWide(pathUtf8);
                 }
 
                 img.homography.h[0] = static_cast<float>(sqlite3_column_double(stmt, 2));

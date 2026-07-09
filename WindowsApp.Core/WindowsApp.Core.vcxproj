@@ -8,6 +8,12 @@
     <MinimumVisualStudioVersion>16.0</MinimumVisualStudioVersion>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformMinVersion>10.0.17763.0</WindowsTargetPlatformMinVersion>
+    <!-- JpegCodec.cpp's libjpeg-turbo dependency is resolved via vcpkg
+         manifest mode (see /vcpkg.json at the repo root) - requires a
+         one-time `vcpkg integrate install` in this environment; see the
+         CMake build's libjpeg-turbo ExternalProject_Add for the
+         Linux/CMake equivalent. -->
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <ItemGroup Label="ProjectConfigurations">
@@ -83,6 +89,21 @@
     <ClInclude Include="HeaderFiles\OverlapCulling.h" />
     <ClInclude Include="HeaderFiles\RenderExecutor.h" />
     <ClInclude Include="HeaderFiles\PanoramaExporter.h" />
+    <ClInclude Include="HeaderFiles\TextEncoding.h" />
+    <ClInclude Include="HeaderFiles\PlatformFile.h" />
+    <ClInclude Include="HeaderFiles\HomographyMath.h" />
+    <ClInclude Include="HeaderFiles\LinearSolve.h" />
+    <ClInclude Include="HeaderFiles\CpuSimdDetect.h" />
+    <ClInclude Include="HeaderFiles\RgbToGray.h" />
+    <ClInclude Include="HeaderFiles\FastFeatureDetector.h" />
+    <ClInclude Include="HeaderFiles\BriefDescriptorExtractor.h" />
+    <ClInclude Include="HeaderFiles\FeatureMatcher.h" />
+    <ClInclude Include="HeaderFiles\GainColorOps.h" />
+    <ClInclude Include="HeaderFiles\MedianStackKernels.h" />
+    <ClInclude Include="HeaderFiles\WarpPerspectiveKernels.h" />
+    <ClInclude Include="HeaderFiles\BayerDemosaicKernels.h" />
+    <ClInclude Include="HeaderFiles\CpuComputeBackend.h" />
+    <ClInclude Include="HeaderFiles\JpegCodec.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
   </ItemGroup>
@@ -129,6 +150,80 @@
     <ClCompile Include="SourceFiles\PanoramaExporter.cpp">
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="SourceFiles\TextEncoding.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\PlatformFile.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\HomographyMath.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\LinearSolve.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\CpuSimdDetect.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\RgbToGray.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\FastFeatureDetector.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\BriefDescriptorExtractor.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\FeatureMatcher.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\GainColorOps.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\CpuComputeBackend.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\JpegCodec.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <!-- Tiered SIMD kernels - one TU per tier (MSVC has no GCC-style
+         function multiversioning), matching the CMake build's
+         set_source_files_properties(... COMPILE_OPTIONS ...) approach via
+         per-file EnableEnhancedInstructionSet overrides. Scalar tiers use
+         the project's default instruction set (no override needed). -->
+    <ClCompile Include="SourceFiles\MedianStack_Scalar.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\MedianStack_Avx2.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\MedianStack_Avx512.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\WarpPerspective_Scalar.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\WarpPerspective_Avx2.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\WarpPerspective_Avx512.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\BayerDemosaic_Scalar.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\BayerDemosaic_Avx2.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\BayerDemosaic_Avx512.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
+    </ClCompile>
     <ClCompile Include="sqlite3\sqlite3.c">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
@@ -139,9 +234,14 @@
     <ProjectReference Include="libraw\LibRaw.vcxproj">
       <Project>{a1b2c3d4-e5f6-7890-abcd-ef1234567890}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\WindowsApp.Compute\WindowsApp.Compute.vcxproj">
-      <Project>{c7b1d440-7228-4444-b2b2-9a9eb2d12b12}</Project>
-    </ProjectReference>
+    <!-- No ProjectReference to WindowsApp.Compute.vcxproj: Core only needs
+         its header-only IComputeBackend/IImageCodec/ComputeTypes
+         (AdditionalIncludeDirectories below), never links CudaPipeline/
+         NvJpegCodec symbols directly - callers inject a
+         shared_ptr<IComputeBackend>/shared_ptr<IImageCodec> at runtime.
+         Building Core no longer requires the CUDA Toolkit; only
+         WindowsApp.vcxproj (the exe, which picks between CudaPipeline and
+         CpuComputeBackend) needs Compute linked. -->
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

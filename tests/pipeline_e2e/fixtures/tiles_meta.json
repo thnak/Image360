@@ -1,0 +1,37 @@
+{
+  "scene_width": 736,
+  "scene_height": 240,
+  "tile_width": 320,
+  "tile_height": 240,
+  "stride": 208,
+  "overlap_px": 112,
+  "tiles": [
+    {
+      "index": 0,
+      "file": "tile_0.png",
+      "x_offset": 0,
+      "y_offset": 0,
+      "width": 320,
+      "height": 240,
+      "dng_file": "tile_0.dng"
+    },
+    {
+      "index": 1,
+      "file": "tile_1.png",
+      "x_offset": 208,
+      "y_offset": 0,
+      "width": 320,
+      "height": 240,
+      "dng_file": "tile_1.dng"
+    },
+    {
+      "index": 2,
+      "file": "tile_2.png",
+      "x_offset": 416,
+      "y_offset": 0,
+      "width": 320,
+      "height": 240,
+      "dng_file": "tile_2.dng"
+    }
+  ]
+}

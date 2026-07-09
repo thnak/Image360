@@ -122,6 +122,7 @@
     <ClInclude Include="MainWindow.xaml.h">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClInclude>
+    <ClInclude Include="ComputeBackendFactory.h" />
   </ItemGroup>
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml" />
@@ -137,6 +138,7 @@
     <ClCompile Include="MainWindow.xaml.cpp">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </ClCompile>
+    <ClCompile Include="ComputeBackendFactory.cpp" />
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -156,14 +158,22 @@
   <ItemGroup>
     <!--
       First-ever link from the UI project into the engine. WindowsApp.Core
-      is a static lib but transitively depends on WindowsApp.Compute, a
-      dynamic lib (CUDA DLL) - WindowsApp.Compute.dll needs to be copied
-      into the WindowsApp (Package).wapproj output, which is NOT assumed
-      to happen automatically for a .wapproj the way it would for a plain
-      .exe project. Verify this when running the packaged app.
+      is a static lib and no longer references WindowsApp.Compute at all
+      (it only needs the header-only IComputeBackend/IImageCodec
+      interfaces) - this project is now the one place that links
+      WindowsApp.Compute directly, since it's the composition root that
+      picks between CudaPipeline (GPU) and CpuComputeBackend (CPU
+      fallback) at runtime (see ComputeBackendFactory). WindowsApp.Compute
+      is a dynamic lib (CUDA DLL) - WindowsApp.Compute.dll needs to be
+      copied into the WindowsApp (Package).wapproj output, which is NOT
+      assumed to happen automatically for a .wapproj the way it would for
+      a plain .exe project. Verify this when running the packaged app.
     -->
     <ProjectReference Include="..\..\WindowsApp.Core\WindowsApp.Core.vcxproj">
       <Project>{d6b1d440-6228-4444-a1a1-9a9eb2d12b11}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\WindowsApp.Compute\WindowsApp.Compute.vcxproj">
+      <Project>{c7b1d440-7228-4444-b2b2-9a9eb2d12b12}</Project>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

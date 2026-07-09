@@ -6,8 +6,9 @@
 
 namespace WindowsApp::Core
 {
-    TaskScheduler::TaskScheduler(ProjectManager& projectManager)
+    TaskScheduler::TaskScheduler(ProjectManager& projectManager, size_t maxInFlight)
         : m_projectManager(projectManager)
+        , m_maxInFlight(maxInFlight)
     {
     }
 
@@ -126,7 +127,7 @@ namespace WindowsApp::Core
 
         while (nextIndex < pending.size() || !inFlight.empty())
         {
-            while (inFlight.size() < kMaxInFlight && nextIndex < pending.size())
+            while (inFlight.size() < m_maxInFlight && nextIndex < pending.size())
             {
                 if (token.stop_requested())
                 {

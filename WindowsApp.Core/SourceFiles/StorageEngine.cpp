@@ -2,14 +2,11 @@
 #include "HeaderFiles/StorageEngine.h"
 #include <algorithm>
 #include <cstring>
+#include <iomanip>
+#include <sstream>
 
 namespace WindowsApp::Core
 {
-    namespace
-    {
-        constexpr DWORD kIoChunkBytes = 64u * 1024 * 1024; // 64 MB per WriteFile/ReadFile call
-    }
-
     StorageEngine::StorageEngine() = default;
 
     StorageEngine::~StorageEngine()
@@ -19,15 +16,15 @@ namespace WindowsApp::Core
 
     std::wstring StorageEngine::ShardPath(int shardIndex) const
     {
-        wchar_t indexBuffer[16];
-        swprintf_s(indexBuffer, L"%04d", shardIndex);
-        return m_projectDirectory + L"\\" + m_projectBaseName + L"." + indexBuffer + L".vfpdata";
+        std::wostringstream indexStream;
+        indexStream << std::setw(4) << std::setfill(L'0') << shardIndex;
+        return m_projectDirectory + L"\\" + m_projectBaseName + L"." + indexStream.str() + L".vfpdata";
     }
 
     bool StorageEngine::OpenOrCreateActiveShard()
     {
         int index = 1;
-        while (GetFileAttributesW(ShardPath(index).c_str()) != INVALID_FILE_ATTRIBUTES)
+        while (PlatformFile::Exists(ShardPath(index)))
         {
             ++index;
         }
@@ -36,36 +33,19 @@ namespace WindowsApp::Core
         m_activeShardIndex = (index > 1) ? (index - 1) : 1;
 
         std::wstring path = ShardPath(m_activeShardIndex);
-        m_activeShardHandle = CreateFileW(
-            path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
-            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (m_activeShardHandle == INVALID_HANDLE_VALUE) return false;
+        if (!m_activeShardFile.Open(path, FileOpenMode::OpenOrCreate)) return false;
 
-        LARGE_INTEGER size{};
-        if (!GetFileSizeEx(m_activeShardHandle, &size))
-        {
-            CloseHandle(m_activeShardHandle);
-            m_activeShardHandle = INVALID_HANDLE_VALUE;
-            return false;
-        }
-        m_activeShardOffset = static_cast<uint64_t>(size.QuadPart);
+        m_activeShardOffset = m_activeShardFile.Size();
         return true;
     }
 
     bool StorageEngine::RollToNextShard()
     {
-        if (m_activeShardHandle != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(m_activeShardHandle);
-            m_activeShardHandle = INVALID_HANDLE_VALUE;
-        }
+        m_activeShardFile.Close();
 
         ++m_activeShardIndex;
         std::wstring path = ShardPath(m_activeShardIndex);
-        m_activeShardHandle = CreateFileW(
-            path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
-            nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (m_activeShardHandle == INVALID_HANDLE_VALUE) return false;
+        if (!m_activeShardFile.Open(path, FileOpenMode::CreateNew)) return false;
 
         m_activeShardOffset = 0;
         return true;
@@ -84,11 +64,7 @@ namespace WindowsApp::Core
 
     void StorageEngine::Close()
     {
-        if (m_activeShardHandle != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(m_activeShardHandle);
-            m_activeShardHandle = INVALID_HANDLE_VALUE;
-        }
+        m_activeShardFile.Close();
         m_projectManager = nullptr;
         m_projectDirectory.clear();
         m_projectBaseName.clear();
@@ -98,32 +74,22 @@ namespace WindowsApp::Core
 
     bool StorageEngine::IsOpen() const
     {
-        return m_activeShardHandle != INVALID_HANDLE_VALUE;
+        return m_activeShardFile.IsOpen();
     }
 
     std::optional<int64_t> StorageEngine::WriteBlob(const void* data, size_t length, const std::string& formatTag)
     {
-        if (m_activeShardHandle == INVALID_HANDLE_VALUE || !m_projectManager) return std::nullopt;
+        std::lock_guard<std::mutex> lock(m_writeMutex);
+
+        if (!m_activeShardFile.IsOpen() || !m_projectManager) return std::nullopt;
 
         if (m_activeShardOffset + length > kMaxShardBytes)
         {
             if (!RollToNextShard()) return std::nullopt;
         }
 
-        LARGE_INTEGER seekPos;
-        seekPos.QuadPart = static_cast<LONGLONG>(m_activeShardOffset);
-        if (!SetFilePointerEx(m_activeShardHandle, seekPos, nullptr, FILE_BEGIN)) return std::nullopt;
-
-        const uint8_t* bytes = static_cast<const uint8_t*>(data);
-        size_t totalWritten = 0;
-        while (totalWritten < length)
-        {
-            DWORD toWrite = static_cast<DWORD>(std::min<size_t>(length - totalWritten, kIoChunkBytes));
-            DWORD written = 0;
-            if (!WriteFile(m_activeShardHandle, bytes + totalWritten, toWrite, &written, nullptr) || written == 0)
-                return std::nullopt;
-            totalWritten += written;
-        }
+        if (!m_activeShardFile.SeekAbsolute(m_activeShardOffset)) return std::nullopt;
+        if (!m_activeShardFile.Write(data, length)) return std::nullopt;
 
         std::wstring fullShardPath = ShardPath(m_activeShardIndex);
         size_t lastSlash = fullShardPath.find_last_of(L'\\');
@@ -150,34 +116,14 @@ namespace WindowsApp::Core
         if (!entry.has_value()) return std::nullopt;
 
         std::wstring path = m_projectDirectory + L"\\" + entry->shardFile;
-        HANDLE handle = CreateFileW(
-            path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (handle == INVALID_HANDLE_VALUE) return std::nullopt;
+        PlatformFile file;
+        if (!file.Open(path, FileOpenMode::ReadOnly)) return std::nullopt;
 
-        LARGE_INTEGER seekPos;
-        seekPos.QuadPart = entry->offset;
-        if (!SetFilePointerEx(handle, seekPos, nullptr, FILE_BEGIN))
-        {
-            CloseHandle(handle);
-            return std::nullopt;
-        }
+        if (!file.SeekAbsolute(static_cast<uint64_t>(entry->offset))) return std::nullopt;
 
         std::vector<uint8_t> buffer(static_cast<size_t>(entry->length));
-        size_t totalRead = 0;
-        while (totalRead < buffer.size())
-        {
-            DWORD toRead = static_cast<DWORD>(std::min<size_t>(buffer.size() - totalRead, kIoChunkBytes));
-            DWORD readBytes = 0;
-            if (!ReadFile(handle, buffer.data() + totalRead, toRead, &readBytes, nullptr) || readBytes == 0)
-            {
-                CloseHandle(handle);
-                return std::nullopt;
-            }
-            totalRead += readBytes;
-        }
+        if (!buffer.empty() && !file.Read(buffer.data(), buffer.size())) return std::nullopt;
 
-        CloseHandle(handle);
         return buffer;
     }
 

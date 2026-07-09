@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "HeaderFiles/PanoramaExporter.h"
+#include "HeaderFiles/PlatformFile.h"
 #include <algorithm>
 #include <vector>
 
@@ -23,7 +24,7 @@ namespace WindowsApp::Core
     }
 
     PanoramaExporter::PanoramaExporter(ProjectManager& projectManager, StorageEngine& storageEngine,
-                                        std::shared_ptr<Compute::NvJpegCodec> nvJpegCodec)
+                                        std::shared_ptr<Compute::IImageCodec> nvJpegCodec)
         : m_projectManager(projectManager)
         , m_storageEngine(storageEngine)
         , m_nvJpegCodec(std::move(nvJpegCodec))
@@ -106,15 +107,9 @@ namespace WindowsApp::Core
             return false;
         }
 
-        HANDLE fileHandle = CreateFileW(
-            destPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (fileHandle == INVALID_HANDLE_VALUE) return false;
+        PlatformFile file;
+        if (!file.Open(destPath, FileOpenMode::CreateAlways)) return false;
 
-        DWORD written = 0;
-        bool writeOk = WriteFile(fileHandle, jpegBytes.data(), static_cast<DWORD>(jpegBytes.size()), &written, nullptr)
-            && written == jpegBytes.size();
-        CloseHandle(fileHandle);
-
-        return writeOk;
+        return file.Write(jpegBytes.data(), jpegBytes.size());
     }
 }

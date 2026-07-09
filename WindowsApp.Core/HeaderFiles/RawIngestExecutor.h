@@ -2,7 +2,7 @@
 #include "ITaskExecutor.h"
 #include "ProjectManager.h"
 #include "StorageEngine.h"
-#include "CudaPipeline.h"
+#include "IComputeBackend.h"
 #include <memory>
 
 namespace WindowsApp::Core
@@ -13,13 +13,13 @@ namespace WindowsApp::Core
     {
     public:
         RawIngestExecutor(ProjectManager& projectManager, StorageEngine& storageEngine,
-                           std::shared_ptr<Compute::CudaPipeline> cudaPipeline);
+                           std::shared_ptr<Compute::IComputeBackend> cudaPipeline);
 
         bool Execute(Task& task, CancellationToken token) override;
 
     private:
         ProjectManager& m_projectManager;
         StorageEngine& m_storageEngine;
-        std::shared_ptr<Compute::CudaPipeline> m_cudaPipeline;
+        std::shared_ptr<Compute::IComputeBackend> m_cudaPipeline;
     };
 }

@@ -119,8 +119,8 @@ namespace WindowsApp::Core
     }
 
     OptimizeExecutor::OptimizeExecutor(ProjectManager& projectManager, StorageEngine& storageEngine,
-                                        std::shared_ptr<Compute::CudaPipeline> cudaPipeline,
-                                        std::shared_ptr<Compute::NvJpegCodec> nvJpegCodec)
+                                        std::shared_ptr<Compute::IComputeBackend> cudaPipeline,
+                                        std::shared_ptr<Compute::IImageCodec> nvJpegCodec)
         : m_projectManager(projectManager)
         , m_storageEngine(storageEngine)
         , m_cudaPipeline(std::move(cudaPipeline))
@@ -454,7 +454,7 @@ namespace WindowsApp::Core
                 return false;
             }
 
-            LmStepResult step = RunOneLmIteration(*m_cudaPipeline, nonReferenceImageIds, correspondences, checkpoint);
+            LmStepResult step = RunOneLmIteration(nonReferenceImageIds, correspondences, checkpoint);
             checkpoint = step.checkpoint;
 
             if (step.converged)

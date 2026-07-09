@@ -108,8 +108,8 @@ namespace WindowsApp::Core
     }
 
     AlignExecutor::AlignExecutor(ProjectManager& projectManager, StorageEngine& storageEngine,
-                                  std::shared_ptr<Compute::CudaPipeline> cudaPipeline,
-                                  std::shared_ptr<Compute::NvJpegCodec> nvJpegCodec)
+                                  std::shared_ptr<Compute::IComputeBackend> cudaPipeline,
+                                  std::shared_ptr<Compute::IImageCodec> nvJpegCodec)
         : m_projectManager(projectManager)
         , m_storageEngine(storageEngine)
         , m_cudaPipeline(std::move(cudaPipeline))
@@ -133,7 +133,7 @@ namespace WindowsApp::Core
     {
         if (!m_cudaPipeline || !m_nvJpegCodec)
         {
-            task.errorMessage = "CudaPipeline or NvJpegCodec not initialized.";
+            task.errorMessage = "Compute backend or JPEG codec not initialized.";
             return false;
         }
 
@@ -232,7 +232,7 @@ namespace WindowsApp::Core
     {
         if (!m_cudaPipeline)
         {
-            task.errorMessage = "CudaPipeline not initialized.";
+            task.errorMessage = "Compute backend not initialized.";
             return false;
         }
 
@@ -290,8 +290,17 @@ namespace WindowsApp::Core
         }
         if (matchCount < 4)
         {
-            task.errorMessage = "Only " + std::to_string(matchCount) + " feature matches found (need >= 4).";
-            return false; // not enough correspondences for a homography
+            // Too few correspondences to fit a homography almost always
+            // means these two images simply don't overlap - expected and
+            // common for any non-adjacent pair once a project has more
+            // than ~2 images (SeedAlignTasks seeds all i<j pairs, not
+            // just neighbors). A successful "no relationship found"
+            // outcome, not a failure - see ExecuteGain's identical
+            // "no data -> a valid default, not an error" philosophy just
+            // below. Failing this task would otherwise fail the entire
+            // Align stage (and thus the whole pipeline) over a pair that
+            // was never expected to connect.
+            return true;
         }
 
         std::vector<std::pair<Compute::FeaturePoint, Compute::FeaturePoint>> correspondences;
@@ -301,11 +310,13 @@ namespace WindowsApp::Core
             correspondences.emplace_back(pointsA[matches[i].indexA], pointsB[matches[i].indexB]);
         }
 
-        RansacResult ransacResult = RunRansacHomography(*m_cudaPipeline, correspondences);
+        RansacResult ransacResult = RunRansacHomography(correspondences);
         if (!ransacResult.success)
         {
-            task.errorMessage = "RANSAC homography estimation did not converge on a consensus.";
-            return false;
+            // Same reasoning as the matchCount<4 case above - a
+            // non-converging RANSAC fit on a genuinely non-overlapping
+            // pair is an expected outcome, not a pipeline failure.
+            return true;
         }
 
         // Image A stays the reference frame in this v1 pass - a

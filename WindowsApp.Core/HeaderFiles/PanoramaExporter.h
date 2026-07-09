@@ -2,8 +2,7 @@
 #include "Types.h"
 #include "ProjectManager.h"
 #include "StorageEngine.h"
-#include "CudaPipeline.h"
-#include "NvJpegCodec.h"
+#include "IImageCodec.h"
 #include <memory>
 #include <string>
 
@@ -31,7 +30,7 @@ namespace WindowsApp::Core
     {
     public:
         PanoramaExporter(ProjectManager& projectManager, StorageEngine& storageEngine,
-                          std::shared_ptr<Compute::NvJpegCodec> nvJpegCodec);
+                          std::shared_ptr<Compute::IImageCodec> nvJpegCodec);
 
         // maxDimension: the exported preview's longest edge in pixels - a
         // multi-gigapixel archival render is never exported at full
@@ -43,6 +42,6 @@ namespace WindowsApp::Core
     private:
         ProjectManager& m_projectManager;
         StorageEngine& m_storageEngine;
-        std::shared_ptr<Compute::NvJpegCodec> m_nvJpegCodec;
+        std::shared_ptr<Compute::IImageCodec> m_nvJpegCodec;
     };
 }

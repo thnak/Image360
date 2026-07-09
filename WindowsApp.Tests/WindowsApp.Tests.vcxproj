@@ -85,9 +85,10 @@
     <ProjectReference Include="..\WindowsApp.Core\WindowsApp.Core.vcxproj">
       <Project>{d6b1d440-6228-4444-a1a1-9a9eb2d12b11}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\WindowsApp.Compute\WindowsApp.Compute.vcxproj">
-      <Project>{c7b1d440-7228-4444-b2b2-9a9eb2d12b12}</Project>
-    </ProjectReference>
+    <!-- No ProjectReference to WindowsApp.Compute.vcxproj (kept as a
+         header-only include dir above) - see WindowsApp.Core.vcxproj's
+         matching comment; tests exercise Core's interfaces/portable math
+         directly, no CUDA link needed. -->
     <ProjectReference Include="..\WindowsApp.Core\libraw\LibRaw.vcxproj">
       <Project>{a1b2c3d4-e5f6-7890-abcd-ef1234567890}</Project>
     </ProjectReference>

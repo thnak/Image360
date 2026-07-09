@@ -29,10 +29,11 @@ namespace WindowsApp::Core
         }
     }
 
-    void PipelineDriver::Initialize(ProgressCallback onProgress, LogCallback onLog)
+    void PipelineDriver::Initialize(ProgressCallback onProgress, LogCallback onLog, size_t maxInFlight)
     {
         m_onProgress = std::move(onProgress);
         m_onLog = std::move(onLog);
+        m_maxInFlight = maxInFlight;
     }
 
     void PipelineDriver::RegisterExecutor(PipelineStage stage, std::shared_ptr<ITaskExecutor> executor)
@@ -50,7 +51,7 @@ namespace WindowsApp::Core
         };
         static constexpr size_t kStageCount = std::size(kStageOrder);
 
-        TaskScheduler scheduler(projectManager);
+        TaskScheduler scheduler(projectManager, m_maxInFlight);
         for (const auto& [stage, executor] : m_executors)
             scheduler.RegisterExecutor(stage, executor);
 

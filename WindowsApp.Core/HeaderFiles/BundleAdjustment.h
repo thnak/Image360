@@ -1,6 +1,6 @@
 #pragma once
 #include "Types.h"
-#include "CudaPipeline.h"
+#include "ComputeTypes.h"
 #include <string>
 #include <vector>
 
@@ -46,14 +46,13 @@ namespace WindowsApp::Core
 
     // One LM iteration: builds a numerical (central-difference) Jacobian
     // and residual vector from every correspondence against the current
-    // parameter estimate, calls
-    // CudaPipeline::TensorSolveNormalEquations, applies the resulting
-    // delta if it reduces total reprojection error (classic LM
-    // accept/reject + lambda up/down). `nonReferenceImageIds` fixes the
-    // parameter-block order (the reference image contributes no
-    // parameters - its homography is fixed identity).
+    // parameter estimate, solves via LinearSolve's portable normal-equations
+    // Cholesky solve, applies the resulting delta if it reduces total
+    // reprojection error (classic LM accept/reject + lambda up/down).
+    // `nonReferenceImageIds` fixes the parameter-block order (the
+    // reference image contributes no parameters - its homography is fixed
+    // identity).
     LmStepResult RunOneLmIteration(
-        Compute::CudaPipeline& cudaPipeline,
         const std::vector<int>& nonReferenceImageIds,
         const std::vector<BaCorrespondence>& correspondences,
         const BaCheckpoint& current);

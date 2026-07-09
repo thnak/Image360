@@ -79,6 +79,9 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="HeaderFiles\ComputeTypes.h" />
+    <ClInclude Include="HeaderFiles\IComputeBackend.h" />
+    <ClInclude Include="HeaderFiles\IImageCodec.h" />
     <ClInclude Include="HeaderFiles\CudaPipeline.h" />
     <ClInclude Include="HeaderFiles\median_stack.cuh" />
     <ClInclude Include="HeaderFiles\tensor_ops.cuh" />

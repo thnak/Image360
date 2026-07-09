@@ -17,6 +17,17 @@ namespace WindowsApp::Core
     // Thresholds match ARCHITECTURE.md SS7.4's example numbers exactly.
     int RecommendedChunkSize(uint64_t totalVramBytes);
 
+    // Same idea for the CPU backend, but a distinct function rather than
+    // an overload with different-meaning numbers - "chunk size vs. system
+    // RAM" is a different curve than "chunk size vs. VRAM": RAM is
+    // typically larger, but shared with the OS/other apps and with
+    // TaskScheduler's own in-flight task window (each in-flight
+    // Render/Align/Optimize task holds a full chunk-sized buffer), so
+    // thresholds are conservative relative to raw RAM size. Callers with a
+    // CpuComputeBackend pass GetGpuInfo().totalMemory (populated with
+    // system RAM for that backend) here instead of VRAM.
+    int RecommendedChunkSizeForCpu(uint64_t totalRamBytes);
+
     struct InputImageModel
     {
         int id = 0;

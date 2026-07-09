@@ -1,10 +1,11 @@
 #pragma once
 #include "ProjectManager.h"
+#include "PlatformFile.h"
 #include <string>
 #include <vector>
 #include <optional>
 #include <cstdint>
-#include <Windows.h>
+#include <mutex>
 
 namespace WindowsApp::Core
 {
@@ -69,8 +70,18 @@ namespace WindowsApp::Core
         std::wstring m_projectDirectory;
         std::wstring m_projectBaseName;
         int m_activeShardIndex = 1;
-        HANDLE m_activeShardHandle = INVALID_HANDLE_VALUE;
+        PlatformFile m_activeShardFile;
         uint64_t m_activeShardOffset = 0;
+
+        // Guards m_activeShardFile/m_activeShardOffset/m_activeShardIndex.
+        // TaskScheduler dispatches multiple tasks per stage concurrently
+        // via std::async, all sharing one StorageEngine instance across
+        // every executor - without this, concurrent WriteBlob calls race
+        // on the same file handle/offset (seek-then-write isn't atomic),
+        // corrupting blob data. ReadBlob opens its own local PlatformFile
+        // per call and only touches immutable-after-Open() fields, so it
+        // doesn't need this lock.
+        std::mutex m_writeMutex;
 
         static constexpr uint64_t kMaxShardBytes = 4ull * 1024 * 1024 * 1024; // 4 GB
 

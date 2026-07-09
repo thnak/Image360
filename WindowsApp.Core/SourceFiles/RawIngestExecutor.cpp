@@ -6,7 +6,7 @@
 namespace WindowsApp::Core
 {
     RawIngestExecutor::RawIngestExecutor(ProjectManager& projectManager, StorageEngine& storageEngine,
-                                          std::shared_ptr<Compute::CudaPipeline> cudaPipeline)
+                                          std::shared_ptr<Compute::IComputeBackend> cudaPipeline)
         : m_projectManager(projectManager)
         , m_storageEngine(storageEngine)
         , m_cudaPipeline(std::move(cudaPipeline))

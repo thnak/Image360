@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "HeaderFiles/ImageLoader.h"
+#include "HeaderFiles/TextEncoding.h"
 #include "libraw/libraw.h"
 #include <algorithm>
 
@@ -69,9 +70,7 @@ namespace WindowsApp::Core
         Close();
 
         // Convert wide path to UTF-8
-        int len = WideCharToMultiByte(CP_UTF8, 0, filePath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string utf8Path(len - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, filePath.c_str(), -1, utf8Path.data(), len, nullptr, nullptr);
+        std::string utf8Path = WideToUtf8(filePath);
 
         int ret = m_impl->processor.open_file(utf8Path.c_str());
         if (ret != LIBRAW_SUCCESS)
@@ -129,15 +128,11 @@ namespace WindowsApp::Core
         // Camera info
         if (idata.make[0])
         {
-            int wlen = MultiByteToWideChar(CP_UTF8, 0, idata.make, -1, nullptr, 0);
-            metadata.cameraMake.resize(wlen - 1);
-            MultiByteToWideChar(CP_UTF8, 0, idata.make, -1, metadata.cameraMake.data(), wlen);
+            metadata.cameraMake = Utf8ToWide(idata.make);
         }
         if (idata.model[0])
         {
-            int wlen = MultiByteToWideChar(CP_UTF8, 0, idata.model, -1, nullptr, 0);
-            metadata.cameraModel.resize(wlen - 1);
-            MultiByteToWideChar(CP_UTF8, 0, idata.model, -1, metadata.cameraModel.data(), wlen);
+            metadata.cameraModel = Utf8ToWide(idata.model);
         }
 
         metadata.isoSpeed = other.iso_speed;
@@ -308,6 +303,26 @@ namespace WindowsApp::Core
         for (int i = 0; i < 4; ++i)
         {
             output.camMul[i] = color.cam_mul[i];
+        }
+
+        // camMul[3] is the Bayer pattern's second green photosite (G2) -
+        // a distinct index from camMul[1]'s G only because some raw
+        // formats/DNGs *can* carry a separate G2 multiplier, but for any
+        // real Bayer sensor both green positions are the same physical
+        // color filter and should share one gain. DNG's AsShotNeutral/
+        // AsShotWhiteXY tags are only 3-component (no G2 slot at all), so
+        // LibRaw's own cam_mul[3] frequently comes back as 0 for
+        // perfectly valid files - and DemosaicBayer's white-balance step
+        // (BayerDemosaic_{Scalar,Avx2,Avx512}.cpp) indexes camMul[channel]
+        // directly per photosite, including channel 3, with no such
+        // fallback - silently zeroing every G2 raw sample and roughly
+        // halving the reconstructed green channel after demosaic averages
+        // real G with zeroed G2 neighbors. A camMul of exactly 0.0 is
+        // never physically meaningful for a channel that receives real
+        // light, so treat it as "not provided" and mirror G's gain.
+        if (output.camMul[3] <= 0.0f)
+        {
+            output.camMul[3] = output.camMul[1];
         }
 
         // libraw_get_rgb_cam is the public C-API accessor for the camera-

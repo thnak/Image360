@@ -18,6 +18,9 @@ bld/
 [Ll]og/
 [Ll]ogs/
 
+## CMake (cross-platform engine build)
+/build/
+
 ## NuGet
 *.nupkg
 *.snupkg
@@ -99,3 +102,8 @@ Kiến trúc Phần mềm.md
 ## Downloaded archives
 *.zip
 LibRaw-*/
+
+## Python (scripts/panorama_gen)
+.venv/
+__pycache__/
+*.pyc
