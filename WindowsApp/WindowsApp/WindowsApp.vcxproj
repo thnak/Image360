@@ -17,6 +17,9 @@
     <ProjectGuid>{e9e11229-ef72-4280-964e-8b66f5575ba6}</ProjectGuid>
     <ProjectName>WindowsApp</ProjectName>
     <RootNamespace>WindowsApp</RootNamespace>
+    <!-- Needed so the exe links libjpeg-turbo transitively via WindowsApp.Core.lib
+         (see the matching comment in WindowsApp.Core.vcxproj). -->
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
     <!--
       $(TargetName) should be same as $(RootNamespace) so that the produced binaries (.exe/.pri/etc.)
       have a name that matches the .winmd
