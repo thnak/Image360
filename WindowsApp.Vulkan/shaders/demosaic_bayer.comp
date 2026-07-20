@@ -1,0 +1,105 @@
+#version 450
+// Matches WindowsApp::Core::Kernels::Scalar::DemosaicBayer
+// (BayerDemosaic_Scalar.cpp, BayerDemosaicKernels.h) exactly: black-level
+// subtract -> white balance -> bilinear demosaic (3x3 same-color neighbor
+// averaging for the two missing channels, exact value for this pixel's
+// own CFA sample) -> camera-RGB -> sRGB 3x4 color matrix.
+//
+// The CPU version precomputes a black-level/white-balanced intermediate
+// CFA plane before demosaicing. That's a pure per-element function of a
+// pixel's own raw sample and its own Bayer channel (no cross-pixel
+// reduction), so it's recomputed inline per neighbor sample here
+// (ProcessedSample) instead of needing a separate pass + barrier.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer CfaBuf { uint data[]; } cfaBuf;
+layout(set = 0, binding = 1) writeonly buffer OutBuf { uint data[]; } outBuf;
+
+layout(push_constant) uniform PushConstants
+{
+    int width;
+    int height;
+    uint blackLevel;
+    uint filters;
+    float camMul[4];
+    float rgbCam[12]; // row-major 3x4, index [row*4 + col]
+} pc;
+
+uint BayerColor(int row, int col)
+{
+    uint r = uint(row);
+    uint c = uint(col);
+    uint shift = (((r << 1u) & 14u) | (c & 1u)) << 1u;
+    return (pc.filters >> shift) & 3u;
+}
+
+uint ProcessedSample(int x, int y)
+{
+    uint raw = cfaBuf.data[uint(y) * uint(pc.width) + uint(x)];
+    uint bl = (raw > pc.blackLevel) ? (raw - pc.blackLevel) : 0u;
+
+    uint channel = BayerColor(y, x);
+    float gain = pc.camMul[channel];
+    float val = float(bl) * gain;
+    val = clamp(val, 0.0, 65535.0);
+    return uint(val);
+}
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    uint total = uint(pc.width) * uint(pc.height);
+    if (idx >= total) return;
+
+    int x = int(idx % uint(pc.width));
+    int y = int(idx / uint(pc.width));
+
+    float rgb[3] = float[3](0.0, 0.0, 0.0);
+    int counts[3] = int[3](0, 0, 0);
+
+    for (int dy = -1; dy <= 1; ++dy)
+    {
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            int nx = x + dx;
+            int ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= pc.width || ny >= pc.height) continue;
+
+            uint nChannel = BayerColor(ny, nx);
+            uint slot = (nChannel == 3u) ? 1u : nChannel;
+            rgb[slot] += float(ProcessedSample(nx, ny));
+            counts[slot] += 1;
+        }
+    }
+
+    uint myChannel = BayerColor(y, x);
+    uint mySlot = (myChannel == 3u) ? 1u : myChannel;
+
+    for (int c = 0; c < 3; ++c)
+    {
+        if (uint(c) == mySlot || counts[c] == 0) continue;
+        rgb[c] /= float(counts[c]);
+    }
+    rgb[mySlot] = float(ProcessedSample(x, y));
+
+    // Truncate to integer here - matches the CPU version storing the
+    // demosaiced result as an intermediate unsigned short array before
+    // the color-matrix pass reads it back as float.
+    float demosaiced[3];
+    for (int c = 0; c < 3; ++c)
+    {
+        demosaiced[c] = float(uint(clamp(rgb[c], 0.0, 65535.0)));
+    }
+
+    uint outBase = idx * 3u;
+    for (int row = 0; row < 3; ++row)
+    {
+        float val = pc.rgbCam[row * 4 + 0] * demosaiced[0]
+                   + pc.rgbCam[row * 4 + 1] * demosaiced[1]
+                   + pc.rgbCam[row * 4 + 2] * demosaiced[2]
+                   + pc.rgbCam[row * 4 + 3];
+        val = clamp(val, 0.0, 65535.0);
+        outBuf.data[outBase + uint(row)] = uint(val);
+    }
+}

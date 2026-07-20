@@ -1,0 +1,85 @@
+#version 450
+// Matches WindowsApp::Core::Kernels::Scalar::MedianStack /
+// Detail::MedianOfSigmaClipped (MedianStack_Scalar.cpp, MedianStackKernels.h)
+// exactly: each of width*height*3 scalar values is stacked independently
+// across up to 32 inputs, sigma-clipped in place (only when count > 3)
+// around the per-scalar mean/std, then the median of what remains is
+// taken via a full sort. The exact sort algorithm doesn't matter, only
+// the sigma-clip statistics and the resulting median value need to match.
+//
+// Up to 32 variable input buffers can't be expressed as a runtime array
+// of buffer pointers in GLSL, so they're bound as a fixed-size array of
+// 32 storage-buffer descriptors; slots beyond numInputs are bound to a
+// small persistent dummy buffer by the host and never read here (loop
+// bound is pc.numInputs, not 32).
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer InBuf { uint vals[]; } inputs[32];
+layout(set = 0, binding = 1) writeonly buffer OutBuf { uint vals[]; } outputBuf;
+
+layout(push_constant) uniform PushConstants
+{
+    uint numInputs;
+    uint numScalars;
+    float sigmaThreshold;
+} pc;
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.numScalars) return;
+
+    uint count = min(pc.numInputs, 32u);
+    uint values[32];
+    for (uint i = 0u; i < count; ++i)
+    {
+        values[i] = inputs[i].vals[idx];
+    }
+
+    uint n = count;
+    if (count > 3u)
+    {
+        float sum = 0.0;
+        float sumSq = 0.0;
+        for (uint i = 0u; i < count; ++i)
+        {
+            float v = float(values[i]);
+            sum += v;
+            sumSq += v * v;
+        }
+        float mean = sum / float(count);
+        float variance = sumSq / float(count) - mean * mean;
+        float sigma = sqrt(max(variance, 0.0));
+        float lower = mean - pc.sigmaThreshold * sigma;
+        float upper = mean + pc.sigmaThreshold * sigma;
+
+        uint validCount = 0u;
+        for (uint i = 0u; i < count; ++i)
+        {
+            float v = float(values[i]);
+            if (v >= lower && v <= upper)
+            {
+                values[validCount] = values[i];
+                validCount++;
+            }
+        }
+        if (validCount > 0u) n = validCount;
+    }
+
+    // Insertion sort - n <= 32, cheap, matches std::sort's resulting order
+    // (any correct sort yields the same median).
+    for (uint i = 1u; i < n; ++i)
+    {
+        uint key = values[i];
+        int j = int(i) - 1;
+        while (j >= 0 && values[j] > key)
+        {
+            values[j + 1] = values[j];
+            j--;
+        }
+        values[j + 1] = key;
+    }
+
+    outputBuf.vals[idx] = values[n / 2u];
+}

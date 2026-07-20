@@ -14,6 +14,8 @@ on:
     paths:
       - 'WindowsApp.Core/**'
       - 'WindowsApp.Compute/**'
+      - 'WindowsApp.Vulkan/**'
+      - 'cmake/**'
       - 'tests/**'
       - 'CMakeLists.txt'
       - '.github/workflows/windows-engine-ci.yml'
@@ -21,6 +23,8 @@ on:
     paths:
       - 'WindowsApp.Core/**'
       - 'WindowsApp.Compute/**'
+      - 'WindowsApp.Vulkan/**'
+      - 'cmake/**'
       - 'tests/**'
       - 'CMakeLists.txt'
 
@@ -33,13 +37,15 @@ jobs:
       - name: Tool inventory
         shell: pwsh
         run: |
-          foreach ($t in 'cmake','cl','ninja','nvcc','git','dotnet') {
+          foreach ($t in 'cmake','cl','ninja','nvcc','git','dotnet','glslc','vulkaninfo') {
             $p = Get-Command $t -ErrorAction SilentlyContinue
             if ($p) { Write-Host "$t -> $($p.Source)" } else { Write-Host "$t -> NOT FOUND" }
           }
           Write-Host "---- vswhere ----"
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           if (Test-Path $vswhere) { & $vswhere -latest -products * -format text } else { Write-Host "vswhere.exe not found" }
+          Write-Host "---- VULKAN_SDK ----"
+          Write-Host "VULKAN_SDK=$env:VULKAN_SDK"
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1

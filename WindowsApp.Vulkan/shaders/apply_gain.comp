@@ -1,0 +1,25 @@
+#version 450
+// Matches WindowsApp::Core::ApplyGainCpu (GainColorOps.cpp) exactly:
+// elementwise multiply by gain, clamp to [0, 65535], truncate to integer.
+// Buffer elements are widened to 32-bit (one uint per original unsigned
+// short scalar) so no 16-bit-storage device extension is required.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer DataBuf { uint data[]; } buf;
+
+layout(push_constant) uniform PushConstants
+{
+    int numPixels;
+    float gain;
+} pc;
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= uint(pc.numPixels)) return;
+
+    float v = float(buf.data[idx]) * pc.gain;
+    v = clamp(v, 0.0, 65535.0);
+    buf.data[idx] = uint(v);
+}

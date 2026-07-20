@@ -1,0 +1,85 @@
+#version 450
+// Matches WindowsApp::Core::Kernels::Scalar::WarpPerspective
+// (WarpPerspective_Scalar.cpp) exactly: backward mapping via inverse
+// homography, bilinear sample, out-of-bounds/near-singular destination
+// pixels write (0,0,0). srcData/dstData are RGB48 (3 scalars/pixel),
+// widened to 32-bit uint per component (see apply_gain.comp).
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer SrcBuf { uint data[]; } src;
+layout(set = 0, binding = 1) writeonly buffer DstBuf { uint data[]; } dst;
+
+layout(push_constant) uniform PushConstants
+{
+    float invH[9];
+    int srcW;
+    int srcH;
+    int dstW;
+    int dstH;
+    int offsetX;
+    int offsetY;
+} pc;
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    uint total = uint(pc.dstW) * uint(pc.dstH);
+    if (idx >= total) return;
+
+    int x = int(idx % uint(pc.dstW));
+    int y = int(idx / uint(pc.dstW));
+    uint outBase = idx * 3u;
+
+    float dstX = float(x + pc.offsetX);
+    float dstY = float(y + pc.offsetY);
+
+    float srcX = pc.invH[0] * dstX + pc.invH[1] * dstY + pc.invH[2];
+    float srcY = pc.invH[3] * dstX + pc.invH[4] * dstY + pc.invH[5];
+    float srcW1 = pc.invH[6] * dstX + pc.invH[7] * dstY + pc.invH[8];
+
+    if (abs(srcW1) < 1e-10)
+    {
+        dst.data[outBase + 0u] = 0u;
+        dst.data[outBase + 1u] = 0u;
+        dst.data[outBase + 2u] = 0u;
+        return;
+    }
+
+    srcX /= srcW1;
+    srcY /= srcW1;
+
+    int sx0 = int(floor(srcX));
+    int sy0 = int(floor(srcY));
+    float fx = srcX - float(sx0);
+    float fy = srcY - float(sy0);
+
+    bool valid = (sx0 >= 0 && sy0 >= 0 && (sx0 + 1) < pc.srcW && (sy0 + 1) < pc.srcH);
+    if (!valid)
+    {
+        dst.data[outBase + 0u] = 0u;
+        dst.data[outBase + 1u] = 0u;
+        dst.data[outBase + 2u] = 0u;
+        return;
+    }
+
+    int sx1 = sx0 + 1;
+    int sy1 = sy0 + 1;
+    float w00 = (1.0 - fx) * (1.0 - fy);
+    float w10 = fx * (1.0 - fy);
+    float w01 = (1.0 - fx) * fy;
+    float w11 = fx * fy;
+
+    uint rowStride = uint(pc.srcW);
+    for (uint c = 0u; c < 3u; ++c)
+    {
+        float v00 = float(src.data[(uint(sy0) * rowStride + uint(sx0)) * 3u + c]);
+        float v10 = float(src.data[(uint(sy0) * rowStride + uint(sx1)) * 3u + c]);
+        float v01 = float(src.data[(uint(sy1) * rowStride + uint(sx0)) * 3u + c]);
+        float v11 = float(src.data[(uint(sy1) * rowStride + uint(sx1)) * 3u + c]);
+
+        float val = w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+        val = clamp(val, 0.0, 65535.0);
+        dst.data[outBase + c] = uint(val);
+    }
+}
