@@ -1,0 +1,59 @@
+name: Windows Engine CI (AMD runner)
+
+# Builds and tests the cross-platform CMake engine (WindowsApp.Core, plus
+# WindowsApp.Compute only when a CUDA compiler is present) on the win-amd
+# self-hosted runner. This is separate from the WindowsApp.slnx MSBuild
+# solution (WinUI shell + packaging), which still needs a CUDA-capable box.
+# On an AMD GPU host, CMake auto-skips WindowsApp.Compute and the engine
+# falls back to its CPU/AVX compute backend.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'WindowsApp.Core/**'
+      - 'WindowsApp.Compute/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/windows-engine-ci.yml'
+  pull_request:
+    paths:
+      - 'WindowsApp.Core/**'
+      - 'WindowsApp.Compute/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+
+jobs:
+  build-and-test:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tool inventory
+        shell: pwsh
+        run: |
+          foreach ($t in 'cmake','cl','ninja','nvcc','git','dotnet') {
+            $p = Get-Command $t -ErrorAction SilentlyContinue
+            if ($p) { Write-Host "$t -> $($p.Source)" } else { Write-Host "$t -> NOT FOUND" }
+          }
+          Write-Host "---- vswhere ----"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) { & $vswhere -latest -products * -format text } else { Write-Host "vswhere.exe not found" }
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (CUDA auto-skipped without nvcc)
+        shell: cmd
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        shell: cmd
+        run: cmake --build build --config Debug --parallel
+
+      - name: Test
+        shell: cmd
+        run: ctest --test-dir build -C Debug --output-on-failure
