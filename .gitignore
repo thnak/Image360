@@ -8,6 +8,8 @@
 ## Build results
 [Dd]ebug/
 [Rr]elease/
+!/WindowsApp.Core/libjpeg-turbo/release/
+!/WindowsApp.Core/libjpeg-turbo/release/**
 x64/
 x86/
 [Aa][Rr][Mm]/
