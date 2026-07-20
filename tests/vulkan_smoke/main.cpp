@@ -154,6 +154,19 @@ namespace
         std::cout << "DemosaicBayer diff: max=" << diff << " mismatched=" << mismatches
                    << "/" << outScalar.size() << std::endl;
 
+        int printed = 0;
+        for (size_t i = 0; i < outScalar.size() && printed < 15; ++i)
+        {
+            if (outScalar[i] == outGpu[i]) continue;
+            int pixel = static_cast<int>(i / 3);
+            int channel = static_cast<int>(i % 3);
+            int px = pixel % w, py = pixel / w;
+            std::cout << "  mismatch idx=" << i << " (x=" << px << ",y=" << py << ",c=" << channel
+                       << ") scalar=" << outScalar[i] << " gpu=" << outGpu[i]
+                       << " cfa[here]=" << cfa[static_cast<size_t>(py) * w + px] << std::endl;
+            ++printed;
+        }
+
         // Real GPU hardware isn't guaranteed bit-identical to MSVC's CPU
         // scalar path for floating-point pixel math (FMA contraction etc.)
         // - same documented tolerance class as WarpPerspective's bilinear
