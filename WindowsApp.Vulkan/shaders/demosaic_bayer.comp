@@ -10,6 +10,15 @@
 // pixel's own raw sample and its own Bayer channel (no cross-pixel
 // reduction), so it's recomputed inline per neighbor sample here
 // (ProcessedSample) instead of needing a separate pass + barrier.
+//
+// Deliberately avoids ALL dynamically-indexed arrays (rgb[slot]/
+// counts[slot] keyed by a runtime-computed channel, rgbCam[row*4+c] keyed
+// by a loop variable) in favor of named scalars/unrolled branches -
+// dynamically-indexed small local arrays combined with continue-heavy
+// nested loops produced wrong results on real AMD RDNA hardware (verified
+// correct on Mesa's llvmpipe software rasterizer, so this was either a
+// driver miscompilation or a construct outside what's safe to rely on
+// across implementations - either way, avoiding it is the robust fix).
 
 layout(local_size_x = 256) in;
 
@@ -26,21 +35,22 @@ layout(push_constant) uniform PushConstants
     float rgbCam[12]; // row-major 3x4, index [row*4 + col]
 } pc;
 
-uint BayerColor(int row, int col)
+uint BayerColor(int row, int col, uint filters)
 {
     uint r = uint(row);
     uint c = uint(col);
     uint shift = (((r << 1u) & 14u) | (c & 1u)) << 1u;
-    return (pc.filters >> shift) & 3u;
+    return (filters >> shift) & 3u;
 }
 
-uint ProcessedSample(int x, int y)
+uint ProcessedSample(int x, int y, int width, uint filters, uint blackLevel,
+                      float camMul0, float camMul1, float camMul2, float camMul3)
 {
-    uint raw = cfaBuf.data[uint(y) * uint(pc.width) + uint(x)];
-    uint bl = (raw > pc.blackLevel) ? (raw - pc.blackLevel) : 0u;
+    uint raw = cfaBuf.data[uint(y) * uint(width) + uint(x)];
+    uint bl = (raw > blackLevel) ? (raw - blackLevel) : 0u;
 
-    uint channel = BayerColor(y, x);
-    float gain = pc.camMul[channel];
+    uint channel = BayerColor(y, x, filters);
+    float gain = (channel == 0u) ? camMul0 : (channel == 1u) ? camMul1 : (channel == 2u) ? camMul2 : camMul3;
     float val = float(bl) * gain;
     val = clamp(val, 0.0, 65535.0);
     return uint(val);
@@ -48,15 +58,24 @@ uint ProcessedSample(int x, int y)
 
 void main()
 {
+    int width = pc.width;
+    int height = pc.height;
+    uint filters = pc.filters;
+    uint blackLevel = pc.blackLevel;
+    float camMul0 = pc.camMul[0];
+    float camMul1 = pc.camMul[1];
+    float camMul2 = pc.camMul[2];
+    float camMul3 = pc.camMul[3];
+
     uint idx = gl_GlobalInvocationID.x;
-    uint total = uint(pc.width) * uint(pc.height);
+    uint total = uint(width) * uint(height);
     if (idx >= total) return;
 
-    int x = int(idx % uint(pc.width));
-    int y = int(idx / uint(pc.width));
+    int x = int(idx % uint(width));
+    int y = int(idx / uint(width));
 
-    float rgb[3] = float[3](0.0, 0.0, 0.0);
-    int counts[3] = int[3](0, 0, 0);
+    float rgb0 = 0.0, rgb1 = 0.0, rgb2 = 0.0;
+    int count0 = 0, count1 = 0, count2 = 0;
 
     for (int dy = -1; dy <= 1; ++dy)
     {
@@ -64,42 +83,44 @@ void main()
         {
             int nx = x + dx;
             int ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= pc.width || ny >= pc.height) continue;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
 
-            uint nChannel = BayerColor(ny, nx);
+            uint nChannel = BayerColor(ny, nx, filters);
             uint slot = (nChannel == 3u) ? 1u : nChannel;
-            rgb[slot] += float(ProcessedSample(nx, ny));
-            counts[slot] += 1;
+            float neighborSample = float(ProcessedSample(nx, ny, width, filters, blackLevel, camMul0, camMul1, camMul2, camMul3));
+
+            if (slot == 0u) { rgb0 += neighborSample; count0 += 1; }
+            else if (slot == 1u) { rgb1 += neighborSample; count1 += 1; }
+            else { rgb2 += neighborSample; count2 += 1; }
         }
     }
 
-    uint myChannel = BayerColor(y, x);
+    uint myChannel = BayerColor(y, x, filters);
     uint mySlot = (myChannel == 3u) ? 1u : myChannel;
 
-    for (int c = 0; c < 3; ++c)
-    {
-        if (uint(c) == mySlot || counts[c] == 0) continue;
-        rgb[c] /= float(counts[c]);
-    }
-    rgb[mySlot] = float(ProcessedSample(x, y));
+    if (mySlot != 0u && count0 != 0) rgb0 /= float(count0);
+    if (mySlot != 1u && count1 != 0) rgb1 /= float(count1);
+    if (mySlot != 2u && count2 != 0) rgb2 /= float(count2);
+
+    float selfSample = float(ProcessedSample(x, y, width, filters, blackLevel, camMul0, camMul1, camMul2, camMul3));
+    if (mySlot == 0u) rgb0 = selfSample;
+    else if (mySlot == 1u) rgb1 = selfSample;
+    else rgb2 = selfSample;
 
     // Truncate to integer here - matches the CPU version storing the
     // demosaiced result as an intermediate unsigned short array before
     // the color-matrix pass reads it back as float.
-    float demosaiced[3];
-    for (int c = 0; c < 3; ++c)
-    {
-        demosaiced[c] = float(uint(clamp(rgb[c], 0.0, 65535.0)));
-    }
+    float demosaiced0 = float(uint(clamp(rgb0, 0.0, 65535.0)));
+    float demosaiced1 = float(uint(clamp(rgb1, 0.0, 65535.0)));
+    float demosaiced2 = float(uint(clamp(rgb2, 0.0, 65535.0)));
 
     uint outBase = idx * 3u;
-    for (int row = 0; row < 3; ++row)
-    {
-        float val = pc.rgbCam[row * 4 + 0] * demosaiced[0]
-                   + pc.rgbCam[row * 4 + 1] * demosaiced[1]
-                   + pc.rgbCam[row * 4 + 2] * demosaiced[2]
-                   + pc.rgbCam[row * 4 + 3];
-        val = clamp(val, 0.0, 65535.0);
-        outBuf.data[outBase + uint(row)] = uint(val);
-    }
+
+    float val0 = pc.rgbCam[0] * demosaiced0 + pc.rgbCam[1] * demosaiced1 + pc.rgbCam[2] * demosaiced2 + pc.rgbCam[3];
+    float val1 = pc.rgbCam[4] * demosaiced0 + pc.rgbCam[5] * demosaiced1 + pc.rgbCam[6] * demosaiced2 + pc.rgbCam[7];
+    float val2 = pc.rgbCam[8] * demosaiced0 + pc.rgbCam[9] * demosaiced1 + pc.rgbCam[10] * demosaiced2 + pc.rgbCam[11];
+
+    outBuf.data[outBase + 0u] = uint(clamp(val0, 0.0, 65535.0));
+    outBuf.data[outBase + 1u] = uint(clamp(val1, 0.0, 65535.0));
+    outBuf.data[outBase + 2u] = uint(clamp(val2, 0.0, 65535.0));
 }
