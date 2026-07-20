@@ -77,7 +77,15 @@ file(GLOB LIBRAW_SOURCES CONFIGURE_DEPENDS
 include(ExternalProject)
 
 set(LIBJPEG_TURBO_INSTALL_DIR ${CMAKE_BINARY_DIR}/libjpeg-turbo-install)
-set(LIBJPEG_TURBO_LIB_NAME "${CMAKE_STATIC_LIBRARY_PREFIX}turbojpeg${CMAKE_STATIC_LIBRARY_SUFFIX}")
+# libjpeg-turbo's own CMakeLists.txt only renames the turbojpeg-static
+# target's output to "turbojpeg" when NOT building with MSVC (to avoid
+# colliding with the shared import lib name on other toolchains) - under
+# MSVC it keeps the target name as the output name, i.e. turbojpeg-static.lib.
+if(MSVC)
+    set(LIBJPEG_TURBO_LIB_NAME "turbojpeg-static${CMAKE_STATIC_LIBRARY_SUFFIX}")
+else()
+    set(LIBJPEG_TURBO_LIB_NAME "${CMAKE_STATIC_LIBRARY_PREFIX}turbojpeg${CMAKE_STATIC_LIBRARY_SUFFIX}")
+endif()
 
 ExternalProject_Add(libjpeg_turbo_ext
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libjpeg-turbo
