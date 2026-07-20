@@ -129,6 +129,14 @@ target_compile_definitions(windowsapp_core
 
 target_link_libraries(windowsapp_core PRIVATE turbojpeg)
 
+# Makefile-based generators (NMake/Unix Makefiles) don't reliably propagate
+# the order-only build dependency from an IMPORTED target's add_dependencies()
+# through to targets that link windowsapp_core transitively (Ninja handles
+# this fine; Make-based generators don't - see CMake issue #14747). Depend on
+# the ExternalProject step target directly so windowsapp_core itself is never
+# built/linked before libjpeg-turbo has produced turbojpeg.lib.
+add_dependencies(windowsapp_core libjpeg_turbo_ext)
+
 if(NOT WIN32)
     find_package(Threads REQUIRED)
     target_link_libraries(windowsapp_core PUBLIC Threads::Threads)
