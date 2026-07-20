@@ -65,4 +65,5 @@ add_subdirectory(tests/pipeline_e2e)
 
 if(IMAGE360_HAVE_VULKAN)
     add_subdirectory(tests/vulkan_smoke)
+    add_subdirectory(tests/pipeline_e2e_vulkan)
 endif()

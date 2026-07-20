@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 namespace WindowsApp { namespace Compute
@@ -66,6 +67,19 @@ namespace WindowsApp { namespace Compute
 
         VkPhysicalDeviceProperties deviceProperties{};
         VkPhysicalDeviceMemoryProperties memoryProperties{};
+
+        // WarpPerspective/MedianStack/ApplyGain/DemosaicBayer all dispatch
+        // through the single shared commandBuffer/fence/computeQueue above
+        // and rewrite each PipelineSet's one persistent descriptorSet before
+        // every submit. The Vulkan spec requires host access to all of
+        // those to be externally synchronized, but callers here are
+        // WindowsApp::Core executors running concurrently on
+        // PipelineDriver's thread pool - serialize every dispatch through
+        // this mutex rather than giving each call its own command
+        // buffer/fence/descriptor set, since these calls are not the
+        // pipeline's bottleneck and per-call Vulkan object churn would add
+        // real complexity for no measured benefit.
+        std::mutex dispatchMutex;
     };
 
     namespace
@@ -563,6 +577,8 @@ namespace WindowsApp { namespace Compute
         if (!srcData || !dstData || !homography) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
         if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
 
+        std::lock_guard<std::mutex> dispatchLock(m_ctx->dispatchMutex);
+
         size_t srcCount = static_cast<size_t>(srcW) * srcH * 3;
         size_t dstPixels = static_cast<size_t>(dstW) * dstH;
         size_t dstCount = dstPixels * 3;
@@ -618,6 +634,8 @@ namespace WindowsApp { namespace Compute
         if (!inputs || !output) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
         if (numInputs <= 0 || numInputs > 32) { SetError("numInputs must be 1-32."); return ComputeResult::INVALID_PARAM; }
         if (width <= 0 || height <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+
+        std::lock_guard<std::mutex> dispatchLock(m_ctx->dispatchMutex);
 
         size_t numScalars = static_cast<size_t>(width) * height * 3;
         VkMemoryPropertyFlags hostProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
@@ -691,6 +709,8 @@ namespace WindowsApp { namespace Compute
         if (!data) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
         if (numPixels <= 0) { SetError("Invalid pixel count."); return ComputeResult::INVALID_PARAM; }
 
+        std::lock_guard<std::mutex> dispatchLock(m_ctx->dispatchMutex);
+
         VkMemoryPropertyFlags hostProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         VkBuffer buf = VK_NULL_HANDLE;
         VkDeviceMemory mem = VK_NULL_HANDLE;
@@ -732,6 +752,8 @@ namespace WindowsApp { namespace Compute
         if (!IsInitialized()) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
         if (!cfaData || !camMul || !rgbCam || !rgbOut) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
         if (width <= 0 || height <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+
+        std::lock_guard<std::mutex> dispatchLock(m_ctx->dispatchMutex);
 
         size_t numPixels = static_cast<size_t>(width) * height;
         VkMemoryPropertyFlags hostProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
