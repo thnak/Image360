@@ -68,6 +68,16 @@ file(GLOB LIBRAW_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/libraw/src/*.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/libraw/src/*/*.cpp
 )
+# postprocessing_ph.cpp/write_ph.cpp are LibRaw's "placeholder" stand-ins for
+# postprocessing_utils.cpp+mem_image.cpp+dcraw_process.cpp and file_write.cpp
+# respectively (build LibRaw w/o postprocessing calls) - mutually exclusive
+# with the real implementations, not additive. LibRaw.vcxproj compiles only
+# preprocessing_ph.cpp (which doesn't conflict with raw2image.cpp) and omits
+# these two; the glob above can't express that distinction, so drop them.
+list(REMOVE_ITEM LIBRAW_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/libraw/src/postprocessing/postprocessing_ph.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/libraw/src/write/write_ph.cpp
+)
 
 # Vendored libjpeg-turbo (JpegCodec's CPU JPEG backend). Its own
 # CMakeLists.txt hard-refuses add_subdirectory() ("use ExternalProject_Add()
