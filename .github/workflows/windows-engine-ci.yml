@@ -43,7 +43,7 @@ jobs:
 
       - name: Configure (CUDA auto-skipped without nvcc)
         shell: cmd
-        run: cmake -S . -B build -A x64
+        run: cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 
       - name: Build
         shell: cmd
