@@ -41,14 +41,19 @@ jobs:
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           if (Test-Path $vswhere) { & $vswhere -latest -products * -format text } else { Write-Host "vswhere.exe not found" }
 
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure (CUDA auto-skipped without nvcc)
         shell: cmd
-        run: cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+        run: cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Debug
 
       - name: Build
         shell: cmd
-        run: cmake --build build --config Debug --parallel
+        run: cmake --build build --parallel
 
       - name: Test
         shell: cmd
-        run: ctest --test-dir build -C Debug --output-on-failure
+        run: ctest --test-dir build --output-on-failure
