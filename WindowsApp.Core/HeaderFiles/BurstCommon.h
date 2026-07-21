@@ -35,6 +35,24 @@ namespace WindowsApp::Core
     inline constexpr float kHdrPlusBrightGamma = 0.5f;
     inline constexpr float kHdrPlusDarkGamma = 2.0f;
 
+    // Super Res Zoom (docs/superpowers/plans/
+    // 2026-07-21-superres-structure-tensor-merge.md) - kSuperResScaleFactor
+    // is the only scale factor this phase's tests exercise (the kernel
+    // itself accepts any scaleFactor >= 1). kSuperResNoiseVariance is
+    // StructureTensorKernelRegression's robustness-weighting denominator
+    // (plays the role of sigma^2 in exp(-delta^2/(2*noiseVariance)),
+    // unlike kBurstMergeSigma which is passed as sigma itself - kept at
+    // the equivalent scale, 2000^2, for the same "typical camera ISO"
+    // assumption as kBurstMergeSigma/kHdrPlusNoiseVariance, not a
+    // calibrated per-ISO noise model either (same scope cut). Test code
+    // that isolates the merge kernel with its own known noise level tunes
+    // this argument directly rather than reusing this production default -
+    // see tests/pipeline_e2e_burst's Step 8. kSubPixelRefineIterations is
+    // RefineOffsetsSubPixel's per-tile Lucas-Kanade iteration count.
+    inline constexpr int kSuperResScaleFactor = 2;
+    inline constexpr float kSuperResNoiseVariance = 4000000.0f;
+    inline constexpr int kSubPixelRefineIterations = 6;
+
     // The lowest-id frame (the first one added) is the alignment/merge
     // reference - not necessarily images.front(), since GetInputImages()'s
     // ordering isn't part of its documented contract.

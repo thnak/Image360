@@ -2,6 +2,7 @@
 #include "HeaderFiles/BurstMergeExecutor.h"
 #include "HeaderFiles/BurstCommon.h"
 #include "HeaderFiles/BlockMatchAlignKernel.h"
+#include "HeaderFiles/SubPixelRefineKernel.h"
 #include "HeaderFiles/ExposureFusionKernel.h"
 
 #include <cmath>
@@ -23,9 +24,9 @@ namespace WindowsApp::Core
         if (token.stop_requested()) return false;
 
         BurstMode mode = m_projectManager.GetBurstMode();
-        if (mode != BurstMode::MFNR && mode != BurstMode::HDR_PLUS)
+        if (mode != BurstMode::MFNR && mode != BurstMode::HDR_PLUS && mode != BurstMode::SUPER_RES)
         {
-            task.errorMessage = "BurstMergeExecutor: not yet implemented for this BurstMode (only MFNR/HDR_PLUS are implemented).";
+            task.errorMessage = "BurstMergeExecutor: not yet implemented for this BurstMode (only MFNR/HDR_PLUS/SUPER_RES are implemented).";
             return false;
         }
 
@@ -83,7 +84,9 @@ namespace WindowsApp::Core
         out.tilesY = (out.referenceBuffer.height + kBurstTileSize - 1) / kBurstTileSize;
 
         out.nonReferenceBuffers.reserve(nonReferenceTasks.size());
-        out.perFrameOffsets.reserve(nonReferenceTasks.size());
+        bool useSubPixelOffsets = m_projectManager.GetBurstMode() == BurstMode::SUPER_RES;
+        if (useSubPixelOffsets) out.perFrameOffsetsF.reserve(nonReferenceTasks.size());
+        else out.perFrameOffsets.reserve(nonReferenceTasks.size());
 
         for (const Task* nonRefTask : nonReferenceTasks)
         {
@@ -99,17 +102,32 @@ namespace WindowsApp::Core
                 return false;
             }
 
-            std::vector<Compute::TileOffset> offsets;
-            int tilesX = 0, tilesY = 0;
-            if (!Kernels::DeserializeTileOffsets(nonRefTask->checkpointJson, offsets, tilesX, tilesY)
-                || tilesX != out.tilesX || tilesY != out.tilesY)
+            if (useSubPixelOffsets)
             {
-                task.errorMessage = "Failed to deserialize (or inconsistent) TileOffset field for a burst frame.";
-                return false;
+                std::vector<Compute::TileOffsetF> offsetsF;
+                int tilesX = 0, tilesY = 0;
+                if (!Kernels::DeserializeTileOffsetsF(nonRefTask->checkpointJson, offsetsF, tilesX, tilesY)
+                    || tilesX != out.tilesX || tilesY != out.tilesY)
+                {
+                    task.errorMessage = "Failed to deserialize (or inconsistent) TileOffsetF field for a burst frame.";
+                    return false;
+                }
+                out.perFrameOffsetsF.push_back(std::move(offsetsF));
+            }
+            else
+            {
+                std::vector<Compute::TileOffset> offsets;
+                int tilesX = 0, tilesY = 0;
+                if (!Kernels::DeserializeTileOffsets(nonRefTask->checkpointJson, offsets, tilesX, tilesY)
+                    || tilesX != out.tilesX || tilesY != out.tilesY)
+                {
+                    task.errorMessage = "Failed to deserialize (or inconsistent) TileOffset field for a burst frame.";
+                    return false;
+                }
+                out.perFrameOffsets.push_back(std::move(offsets));
             }
 
             out.nonReferenceBuffers.push_back(std::move(*buffer));
-            out.perFrameOffsets.push_back(std::move(offsets));
         }
 
         return true;
@@ -126,30 +144,50 @@ namespace WindowsApp::Core
         framePtrs.push_back(gathered.referenceBuffer.data.data());
         for (const auto& buffer : gathered.nonReferenceBuffers) framePtrs.push_back(buffer.data.data());
 
-        std::vector<const Compute::TileOffset*> offsetPtrs;
-        offsetPtrs.reserve(gathered.perFrameOffsets.size());
-        for (const auto& offsets : gathered.perFrameOffsets) offsetPtrs.push_back(offsets.data());
-
-        PixelBuffer merged;
-        merged.width = gathered.referenceBuffer.width;
-        merged.height = gathered.referenceBuffer.height;
-        merged.data.resize(gathered.referenceBuffer.data.size());
-
         BurstMode mode = m_projectManager.GetBurstMode();
         Compute::ComputeResult result;
-        if (mode == BurstMode::HDR_PLUS)
+        PixelBuffer merged;
+
+        if (mode == BurstMode::SUPER_RES)
         {
-            result = m_computeBackend->TileFftMerge(
-                framePtrs.data(), static_cast<int>(framePtrs.size()), offsetPtrs.data(),
-                merged.width, merged.height, kBurstTileSize, gathered.tilesX, gathered.tilesY,
-                kHdrPlusNoiseVariance, merged.data.data());
+            std::vector<const Compute::TileOffsetF*> offsetPtrsF;
+            offsetPtrsF.reserve(gathered.perFrameOffsetsF.size());
+            for (const auto& offsets : gathered.perFrameOffsetsF) offsetPtrsF.push_back(offsets.data());
+
+            merged.width = gathered.referenceBuffer.width * kSuperResScaleFactor;
+            merged.height = gathered.referenceBuffer.height * kSuperResScaleFactor;
+            merged.data.resize(static_cast<size_t>(merged.width) * merged.height * 3);
+
+            result = m_computeBackend->StructureTensorKernelRegression(
+                framePtrs.data(), static_cast<int>(framePtrs.size()), offsetPtrsF.data(),
+                gathered.referenceBuffer.width, gathered.referenceBuffer.height, kBurstTileSize,
+                gathered.tilesX, gathered.tilesY, kSuperResScaleFactor, kSuperResNoiseVariance,
+                merged.data.data());
         }
         else
         {
-            result = m_computeBackend->RobustMergeAccumulate(
-                framePtrs.data(), static_cast<int>(framePtrs.size()), offsetPtrs.data(),
-                merged.width, merged.height, kBurstTileSize, gathered.tilesX, gathered.tilesY,
-                kBurstMergeSigma, merged.data.data());
+            std::vector<const Compute::TileOffset*> offsetPtrs;
+            offsetPtrs.reserve(gathered.perFrameOffsets.size());
+            for (const auto& offsets : gathered.perFrameOffsets) offsetPtrs.push_back(offsets.data());
+
+            merged.width = gathered.referenceBuffer.width;
+            merged.height = gathered.referenceBuffer.height;
+            merged.data.resize(gathered.referenceBuffer.data.size());
+
+            if (mode == BurstMode::HDR_PLUS)
+            {
+                result = m_computeBackend->TileFftMerge(
+                    framePtrs.data(), static_cast<int>(framePtrs.size()), offsetPtrs.data(),
+                    merged.width, merged.height, kBurstTileSize, gathered.tilesX, gathered.tilesY,
+                    kHdrPlusNoiseVariance, merged.data.data());
+            }
+            else
+            {
+                result = m_computeBackend->RobustMergeAccumulate(
+                    framePtrs.data(), static_cast<int>(framePtrs.size()), offsetPtrs.data(),
+                    merged.width, merged.height, kBurstTileSize, gathered.tilesX, gathered.tilesY,
+                    kBurstMergeSigma, merged.data.data());
+            }
         }
         if (result != Compute::ComputeResult::SUCCESS)
         {
@@ -235,9 +273,9 @@ namespace WindowsApp::Core
 
         // Passthrough: copies the exact bytes (including WritePixelBuffer's
         // embedded width/height header) forward under a new blob, rather
-        // than round-tripping through PixelBuffer - MFNR's BURST_FINISH
-        // has no actual transformation to apply (see this class's header
-        // comment).
+        // than round-tripping through PixelBuffer - neither MFNR's nor
+        // SUPER_RES's BURST_FINISH has an actual transformation to apply
+        // in this phase's scope (see this class's header comment).
         auto blobId = m_storageEngine.WriteBlob(bytes->data(), bytes->size(), "raw_rgb48");
         if (!blobId.has_value())
         {

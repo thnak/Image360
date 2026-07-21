@@ -911,4 +911,16 @@ namespace WindowsApp { namespace Compute
                  "- use the CPU backend for burst-mode projects.");
         return ComputeResult::NOT_SUPPORTED;
     }
+
+    ComputeResult VulkanPipeline::StructureTensorKernelRegression(
+        const unsigned short* const* /*frames*/, int /*numFrames*/,
+        const TileOffsetF* const* /*perFrameOffsets*/,
+        int /*width*/, int /*height*/, int /*tileSize*/, int /*tilesX*/, int /*tilesY*/,
+        int /*scaleFactor*/, float /*noiseVariance*/, unsigned short* /*output*/)
+    {
+        SetError("StructureTensorKernelRegression not implemented on the Vulkan backend yet "
+                 "(tracked gap, see docs/superpowers/plans/2026-07-21-superres-structure-tensor-merge.md Task 2) "
+                 "- use the CPU backend for burst-mode projects.");
+        return ComputeResult::NOT_SUPPORTED;
+    }
 }}

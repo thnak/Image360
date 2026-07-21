@@ -164,6 +164,14 @@ namespace WindowsApp { namespace Compute
             int width, int height, int tileSize, int tilesX, int tilesY,
             float noiseVariance, unsigned short* output) override;
 
+        // NOT_SUPPORTED on this backend as of docs/superpowers/plans/
+        // 2026-07-21-superres-structure-tensor-merge.md (CPU only so far).
+        ComputeResult StructureTensorKernelRegression(
+            const unsigned short* const* frames, int numFrames,
+            const TileOffsetF* const* perFrameOffsets,
+            int width, int height, int tileSize, int tilesX, int tilesY,
+            int scaleFactor, float noiseVariance, unsigned short* output) override;
+
         // =====================================================================
         // Tensor Core Operations (requires SM 7.0+)
         // =====================================================================

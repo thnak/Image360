@@ -139,5 +139,32 @@ namespace WindowsApp { namespace Compute
             const TileOffset* const* perFrameOffsets,
             int width, int height, int tileSize, int tilesX, int tilesY,
             float noiseVariance, unsigned short* output) = 0;
+
+        // Super Res Zoom's merge (docs/COMPUTATIONAL_PHOTOGRAPHY.md SS2.4) -
+        // local gradient structure-tensor analysis + anisotropic kernel
+        // construction (elongated along edges) + kernel-regression
+        // accumulation onto an upsampled output grid + the same kind of
+        // noise-based robustness weighting RobustMergeAccumulate uses -
+        // a genuinely different algorithm from both RobustMergeAccumulate's
+        // spatial average and TileFftMerge's frequency-domain shrinkage,
+        // per SS2.3's correction. Same frames[0]-is-reference convention as
+        // the other two merge ops, but perFrameOffsets is TileOffsetF
+        // (sub-pixel-refined, see BlockMatchAlign's doc comment on a
+        // future refined variant - this is that variant, produced by
+        // Core's own RefineOffsetsSubPixel, not by this backend) rather
+        // than TileOffset. output: caller-allocated
+        // (width*scaleFactor)*(height*scaleFactor)*3 (RGB48) - NOT the
+        // input resolution, unlike the other two merge ops. noiseVariance
+        // is the robustness term's fixed 2*sigma^2 denominator (must be
+        // > 0 - INVALID_PARAM otherwise, avoiding a division-by-zero
+        // rather than guarding it per-pixel like TileFftMerge's Wiener
+        // term does). CPU-only as of docs/superpowers/plans/
+        // 2026-07-21-superres-structure-tensor-merge.md - CUDA/Vulkan
+        // return NOT_SUPPORTED.
+        virtual ComputeResult StructureTensorKernelRegression(
+            const unsigned short* const* frames, int numFrames,
+            const TileOffsetF* const* perFrameOffsets,
+            int width, int height, int tileSize, int tilesX, int tilesY,
+            int scaleFactor, float noiseVariance, unsigned short* output) = 0;
     };
 }}

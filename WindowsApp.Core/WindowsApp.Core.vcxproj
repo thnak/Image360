@@ -111,6 +111,8 @@
     <ClInclude Include="HeaderFiles\BurstMergeExecutor.h" />
     <ClInclude Include="HeaderFiles\TileFftMergeKernel.h" />
     <ClInclude Include="HeaderFiles\ExposureFusionKernel.h" />
+    <ClInclude Include="HeaderFiles\SubPixelRefineKernel.h" />
+    <ClInclude Include="HeaderFiles\StructureTensorMergeKernel.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
     <ClInclude Include="stb\stb_image.h" />
@@ -213,6 +215,12 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="SourceFiles\ExposureFusionKernel.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\SubPixelRefineKernel.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\StructureTensorMergeKernel.cpp">
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <!-- Tiered SIMD kernels - one TU per tier (MSVC has no GCC-style

@@ -75,6 +75,12 @@ namespace WindowsApp::Core
             int width, int height, int tileSize, int tilesX, int tilesY,
             float noiseVariance, unsigned short* output) override;
 
+        Compute::ComputeResult StructureTensorKernelRegression(
+            const unsigned short* const* frames, int numFrames,
+            const Compute::TileOffsetF* const* perFrameOffsets,
+            int width, int height, int tileSize, int tilesX, int tilesY,
+            int scaleFactor, float noiseVariance, unsigned short* output) override;
+
     private:
         bool m_initialized = false;
         SimdTier m_tier = SimdTier::Scalar;

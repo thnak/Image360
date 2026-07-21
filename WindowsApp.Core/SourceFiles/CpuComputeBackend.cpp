@@ -12,6 +12,7 @@
 #include "HeaderFiles/BlockMatchAlignKernel.h"
 #include "HeaderFiles/RobustMergeKernel.h"
 #include "HeaderFiles/TileFftMergeKernel.h"
+#include "HeaderFiles/StructureTensorMergeKernel.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -305,6 +306,26 @@ namespace WindowsApp::Core
             SetError("tileSize must be a power of two (TileFftMerge is a radix-2 FFT).");
             return ComputeResult::INVALID_PARAM;
         }
+        return ComputeResult::SUCCESS;
+    }
+
+    ComputeResult CpuComputeBackend::StructureTensorKernelRegression(
+        const unsigned short* const* frames, int numFrames,
+        const TileOffsetF* const* perFrameOffsets,
+        int width, int height, int tileSize, int tilesX, int tilesY,
+        int scaleFactor, float noiseVariance, unsigned short* output)
+    {
+        if (!m_initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!frames || !output) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (numFrames <= 0) { SetError("numFrames must be >= 1."); return ComputeResult::INVALID_PARAM; }
+        if (numFrames > 1 && !perFrameOffsets) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (width <= 0 || height <= 0 || tileSize <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+        if (tilesX <= 0 || tilesY <= 0) { SetError("Invalid tile grid."); return ComputeResult::INVALID_PARAM; }
+        if (scaleFactor <= 0) { SetError("scaleFactor must be >= 1."); return ComputeResult::INVALID_PARAM; }
+        if (noiseVariance <= 0.0f) { SetError("noiseVariance must be positive."); return ComputeResult::INVALID_PARAM; }
+
+        Kernels::StructureTensorKernelRegression(frames, numFrames, perFrameOffsets, width, height, tileSize,
+                                                   tilesX, tilesY, scaleFactor, noiseVariance, output);
         return ComputeResult::SUCCESS;
     }
 }

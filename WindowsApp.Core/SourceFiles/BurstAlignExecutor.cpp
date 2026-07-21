@@ -2,6 +2,7 @@
 #include "HeaderFiles/BurstAlignExecutor.h"
 #include "HeaderFiles/RawIngestExecutor.h"
 #include "HeaderFiles/BlockMatchAlignKernel.h"
+#include "HeaderFiles/SubPixelRefineKernel.h"
 #include "HeaderFiles/BurstCommon.h"
 
 #include <algorithm>
@@ -83,7 +84,27 @@ namespace WindowsApp::Core
             return false;
         }
 
-        task.checkpointJson = Kernels::SerializeTileOffsets(offsets, tilesX, tilesY);
+        if (m_projectManager.GetBurstMode() == BurstMode::SUPER_RES)
+        {
+            // Sub-pixel refinement (docs/superpowers/plans/
+            // 2026-07-21-superres-structure-tensor-merge.md Task 1/3) -
+            // seeded from the integer BlockMatchAlign result just computed
+            // above, not a second independent align pass. Serialized as
+            // floats instead of BlockMatchAlign's integer format - a mode
+            // branch on the serialization format only.
+            std::vector<Compute::TileOffsetF> refinedOffsets(offsets.size());
+            Kernels::RefineOffsetsSubPixel(
+                referenceBuffer.data.data(), buffer.data.data(),
+                buffer.width, buffer.height, kBurstTileSize,
+                offsets.data(), tilesX, tilesY,
+                kSubPixelRefineIterations, refinedOffsets.data());
+
+            task.checkpointJson = Kernels::SerializeTileOffsetsF(refinedOffsets, tilesX, tilesY);
+        }
+        else
+        {
+            task.checkpointJson = Kernels::SerializeTileOffsets(offsets, tilesX, tilesY);
+        }
         // Setting task.checkpointJson alone is NOT persisted by
         // TaskScheduler (it only commits status/outputBlobId once Execute
         // returns) - must be written explicitly, matching

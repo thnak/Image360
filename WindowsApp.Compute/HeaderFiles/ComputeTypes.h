@@ -66,6 +66,18 @@ namespace WindowsApp { namespace Compute
         int dy = 0;
     };
 
+    // Sub-pixel-refined per-tile translation (docs/superpowers/plans/
+    // 2026-07-21-superres-structure-tensor-merge.md Task 1) - a distinct
+    // type from TileOffset rather than a reinterpretation, so a caller can
+    // never accidentally pass integer-only offsets where sub-pixel ones
+    // are expected. Same sign convention as TileOffset: src coordinate =
+    // ref coordinate + offset.
+    struct TileOffsetF
+    {
+        float dx = 0.0f;
+        float dy = 0.0f;
+    };
+
     using BriefDescriptor = uint64_t[4]; // 256-bit binary descriptor
 
     struct MatchResult

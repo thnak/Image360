@@ -32,6 +32,8 @@ set(CORE_SOURCES
     SourceFiles/ExposureFusionKernel.cpp
     SourceFiles/RobustMergeKernel.cpp
     SourceFiles/SeamBlend.cpp
+    SourceFiles/StructureTensorMergeKernel.cpp
+    SourceFiles/SubPixelRefineKernel.cpp
     SourceFiles/TileFftMergeKernel.cpp
     SourceFiles/StorageEngine.cpp
     SourceFiles/TaskScheduler.cpp
