@@ -177,17 +177,19 @@
       VulkanPipeline (GPU), and CpuComputeBackend (CPU fallback) at
       runtime (see ComputeBackendFactory). WindowsApp.Compute is a dynamic
       lib (CUDA DLL) - CONFIRMED (not just a theoretical risk) that
-      WindowsApp.Compute.dll and vcpkg-provided DLLs like turbojpeg.dll do
-      NOT reliably end up next to WindowsApp.exe across different build
-      invocations (MSBuild's incremental-clean bookkeeping can sweep them
-      away when the project is built from a different context, e.g. the
-      .wapproj built standalone vs. via the .slnx) - a manual copy step
-      was needed to get an unpackaged WindowsApp.exe to even load. Needs a
-      proper fix (an explicit post-build copy target) before relying on
-      an unpackaged deploy of this exe; the WindowsApp (Package).wapproj
-      packaging path hasn't been re-verified against this same failure
-      mode. WindowsApp.Vulkan is a static lib, so it doesn't have this
-      problem - its code links straight into WindowsApp.exe.
+      WindowsApp.Compute.dll does NOT get copied next to WindowsApp.exe by
+      the ProjectReference alone - unlike .NET ProjectReferences, native
+      C++ vcxproj-to-vcxproj references don't auto-copy the referenced
+      DLL into a dependent project's output folder, and WindowsApp.exe's
+      $(OutDir) (a WinUI/packaging-project convention, nested under its
+      own project subfolder) differs from WindowsApp.Compute's own
+      default $(OutDir). This bit an actual unpackaged-exe run (missing
+      export at load time from a stale copy of the DLL) before the
+      CopyComputeDllToOutput target below was added. turbojpeg.dll
+      doesn't have this problem - vcpkg's manifest-mode MSBuild
+      integration app-locally deploys its own dependency DLLs on its own.
+      WindowsApp.Vulkan is a static lib, so it doesn't have this problem
+      either - its code links straight into WindowsApp.exe.
     -->
     <ProjectReference Include="..\..\WindowsApp.Core\WindowsApp.Core.vcxproj">
       <Project>{d6b1d440-6228-4444-a1a1-9a9eb2d12b11}</Project>
@@ -252,5 +254,17 @@
       <WebView2Files Include="$(OutDir)Microsoft.Web.WebView2.Core.Projection.dll" />
     </ItemGroup>
     <Delete Files="@(WebView2Files)" />
+  </Target>
+  <!--
+    See the comment on the WindowsApp.Compute ProjectReference above: native
+    C++ project references don't copy their DLL output into a dependent
+    project's own $(OutDir) the way .NET ProjectReferences do, and
+    WindowsApp.Compute's default OutDir differs from this project's. Without
+    this, an unpackaged WindowsApp.exe run can silently load a stale
+    WindowsApp.Compute.dll left over from an earlier build/copy, failing at
+    load time with a missing-export error rather than a clear file-not-found.
+  -->
+  <Target Name="CopyComputeDllToOutput" AfterTargets="AfterBuild" Condition="Exists('$(SolutionDir)$(Platform)\$(Configuration)\WindowsApp.Compute.dll')">
+    <Copy SourceFiles="$(SolutionDir)$(Platform)\$(Configuration)\WindowsApp.Compute.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="false" />
   </Target>
 </Project>
