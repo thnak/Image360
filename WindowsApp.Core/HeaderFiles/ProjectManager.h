@@ -79,6 +79,20 @@ namespace WindowsApp::Core
         // unit_key) constraint.
         bool SeedIngestTasks();
 
+        // Burst-mode task seeding (docs/COMPUTATIONAL_PHOTOGRAPHY.md SS3,
+        // docs/superpowers/plans/2026-07-21-mfnr-block-match-merge.md).
+        // One BURST_ALIGN/"frame" task per input image (a burst project's
+        // "frames" are stored via the same AddInputImage/input_images path
+        // panorama's input images use). Call after every frame has been
+        // added.
+        bool SeedBurstAlignTasks();
+
+        // Exactly one BURST_MERGE/"output"/"merged" task and one
+        // BURST_FINISH/"output"/"final" task - safe to seed upfront
+        // alongside SeedBurstAlignTasks, unlike panorama's SeedRenderTasks
+        // (see this method's own .cpp comment for why).
+        bool SeedBurstMergeTasks();
+
         // One STAGE1_ALIGN/"image" task per input image (feature
         // extraction); one STAGE1_ALIGN/"pair" task per (i, j) with i < j
         // over all input images (match + RANSAC) - all-pairs, an

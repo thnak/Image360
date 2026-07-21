@@ -9,6 +9,8 @@
 #include "HeaderFiles/MedianStackKernels.h"
 #include "HeaderFiles/WarpPerspectiveKernels.h"
 #include "HeaderFiles/BayerDemosaicKernels.h"
+#include "HeaderFiles/BlockMatchAlignKernel.h"
+#include "HeaderFiles/RobustMergeKernel.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -248,6 +250,38 @@ namespace WindowsApp::Core
         if (width <= 0 || height <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
 
         ApplyReinhardColorTransferCpu(rgbInOut, width, height, srcMean, srcStd, refMean, refStd);
+        return ComputeResult::SUCCESS;
+    }
+
+    ComputeResult CpuComputeBackend::BlockMatchAlign(
+        const unsigned short* refData, const unsigned short* srcData,
+        int width, int height, int tileSize, int searchRadius,
+        TileOffset* outOffsets, int tilesX, int tilesY)
+    {
+        if (!m_initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!refData || !srcData || !outOffsets) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (width <= 0 || height <= 0 || tileSize <= 0 || searchRadius < 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+        if (tilesX <= 0 || tilesY <= 0) { SetError("Invalid tile grid."); return ComputeResult::INVALID_PARAM; }
+
+        Kernels::BlockMatchAlign(refData, srcData, width, height, tileSize, searchRadius, outOffsets, tilesX, tilesY);
+        return ComputeResult::SUCCESS;
+    }
+
+    ComputeResult CpuComputeBackend::RobustMergeAccumulate(
+        const unsigned short* const* frames, int numFrames,
+        const TileOffset* const* perFrameOffsets,
+        int width, int height, int tileSize, int tilesX, int tilesY,
+        float sigma, unsigned short* output)
+    {
+        if (!m_initialized) { SetError("Not initialized."); return ComputeResult::CUDA_ERROR; }
+        if (!frames || !output) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (numFrames <= 0) { SetError("numFrames must be >= 1."); return ComputeResult::INVALID_PARAM; }
+        if (numFrames > 1 && !perFrameOffsets) { SetError("Null pointer argument."); return ComputeResult::INVALID_PARAM; }
+        if (width <= 0 || height <= 0 || tileSize <= 0) { SetError("Invalid dimensions."); return ComputeResult::INVALID_PARAM; }
+        if (tilesX <= 0 || tilesY <= 0) { SetError("Invalid tile grid."); return ComputeResult::INVALID_PARAM; }
+        if (sigma <= 0.0f) { SetError("sigma must be positive."); return ComputeResult::INVALID_PARAM; }
+
+        Kernels::RobustMergeAccumulate(frames, numFrames, perFrameOffsets, width, height, tileSize, tilesX, tilesY, sigma, output);
         return ComputeResult::SUCCESS;
     }
 }

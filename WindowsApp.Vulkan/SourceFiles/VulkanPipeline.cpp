@@ -876,4 +876,27 @@ namespace WindowsApp { namespace Compute
         Core::ApplyReinhardColorTransferCpu(rgbInOut, width, height, srcMean, srcStd, refMean, refStd);
         return ComputeResult::SUCCESS;
     }
+
+    ComputeResult VulkanPipeline::BlockMatchAlign(
+        const unsigned short* /*refData*/, const unsigned short* /*srcData*/,
+        int /*width*/, int /*height*/, int /*tileSize*/, int /*searchRadius*/,
+        TileOffset* /*outOffsets*/, int /*tilesX*/, int /*tilesY*/)
+    {
+        SetError("BlockMatchAlign not implemented on the Vulkan backend yet "
+                 "(tracked gap, see docs/superpowers/plans/2026-07-21-mfnr-block-match-merge.md Task 2) "
+                 "- use the CPU backend for burst-mode projects.");
+        return ComputeResult::NOT_SUPPORTED;
+    }
+
+    ComputeResult VulkanPipeline::RobustMergeAccumulate(
+        const unsigned short* const* /*frames*/, int /*numFrames*/,
+        const TileOffset* const* /*perFrameOffsets*/,
+        int /*width*/, int /*height*/, int /*tileSize*/, int /*tilesX*/, int /*tilesY*/,
+        float /*sigma*/, unsigned short* /*output*/)
+    {
+        SetError("RobustMergeAccumulate not implemented on the Vulkan backend yet "
+                 "(tracked gap, see docs/superpowers/plans/2026-07-21-mfnr-block-match-merge.md Task 2) "
+                 "- use the CPU backend for burst-mode projects.");
+        return ComputeResult::NOT_SUPPORTED;
+    }
 }}

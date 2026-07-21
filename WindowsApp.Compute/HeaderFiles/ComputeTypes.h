@@ -36,13 +36,34 @@ namespace WindowsApp { namespace Compute
         INVALID_PARAM = 2,
         OUT_OF_MEMORY = 3,
         KERNEL_LAUNCH_FAILED = 4,
-        CUDA_ERROR = 5
+        CUDA_ERROR = 5,
+        // A real, typed "not implemented on this backend yet" signal - for
+        // ops where only a subset of IComputeBackend's implementations
+        // have a real kernel (e.g. BlockMatchAlign/RobustMergeAccumulate,
+        // CPU-only as of docs/superpowers/plans/2026-07-21-mfnr-block-match-merge.md).
+        // Deliberately distinct from every other failure code so a caller
+        // (or a test) can tell "this backend doesn't support this op" apart
+        // from "the op was attempted and failed" - see
+        // docs/COMPUTATIONAL_PHOTOGRAPHY.md SS4's backend-coverage-matrix
+        // guidance, this is that tracking mechanism's first real use.
+        NOT_SUPPORTED = 6
     };
 
     struct FeaturePoint
     {
         float x = 0.0f;
         float y = 0.0f;
+    };
+
+    // Per-tile local translation (BlockMatchAlign's output, docs/
+    // COMPUTATIONAL_PHOTOGRAPHY.md SS3) - deliberately not a Homography:
+    // this is a dense per-tile field, not one global transform, so it
+    // needs its own tiny type rather than reusing the panorama path's
+    // Homography for a one-component (translation-only) special case.
+    struct TileOffset
+    {
+        int dx = 0;
+        int dy = 0;
     };
 
     using BriefDescriptor = uint64_t[4]; // 256-bit binary descriptor

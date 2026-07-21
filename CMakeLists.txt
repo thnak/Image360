@@ -69,6 +69,7 @@ add_subdirectory(tests/engine_smoke)
 add_subdirectory(tests/raw_probe)
 add_subdirectory(tests/render_blend)
 add_subdirectory(tests/pipeline_e2e)
+add_subdirectory(tests/pipeline_e2e_burst)
 
 if(IMAGE360_HAVE_VULKAN)
     add_subdirectory(tests/vulkan_smoke)

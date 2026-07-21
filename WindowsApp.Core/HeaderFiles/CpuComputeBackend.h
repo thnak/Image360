@@ -58,6 +58,17 @@ namespace WindowsApp::Core
             const double srcMean[3], const double srcStd[3],
             const double refMean[3], const double refStd[3]) override;
 
+        Compute::ComputeResult BlockMatchAlign(
+            const unsigned short* refData, const unsigned short* srcData,
+            int width, int height, int tileSize, int searchRadius,
+            Compute::TileOffset* outOffsets, int tilesX, int tilesY) override;
+
+        Compute::ComputeResult RobustMergeAccumulate(
+            const unsigned short* const* frames, int numFrames,
+            const Compute::TileOffset* const* perFrameOffsets,
+            int width, int height, int tileSize, int tilesX, int tilesY,
+            float sigma, unsigned short* output) override;
+
     private:
         bool m_initialized = false;
         SimdTier m_tier = SimdTier::Scalar;

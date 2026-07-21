@@ -5,6 +5,7 @@
 
 set(CORE_SOURCES
     SourceFiles/AlignExecutor.cpp
+    SourceFiles/BlockMatchAlignKernel.cpp
     SourceFiles/BriefDescriptorExtractor.cpp
     SourceFiles/BundleAdjustment.cpp
     SourceFiles/CpuComputeBackend.cpp
@@ -26,6 +27,9 @@ set(CORE_SOURCES
     SourceFiles/RawIngestExecutor.cpp
     SourceFiles/RenderExecutor.cpp
     SourceFiles/RgbToGray.cpp
+    SourceFiles/BurstAlignExecutor.cpp
+    SourceFiles/BurstMergeExecutor.cpp
+    SourceFiles/RobustMergeKernel.cpp
     SourceFiles/SeamBlend.cpp
     SourceFiles/StorageEngine.cpp
     SourceFiles/TaskScheduler.cpp

@@ -101,6 +101,11 @@ namespace WindowsApp::Core
         TaskStatus status = TaskStatus::PENDING;
         int attemptCount = 0;
         std::optional<int64_t> outputBlobId;
+        // Small opaque per-task state - originally just bundle-adjustment's
+        // LM checkpoint (parameters/lambda/iteration), but reused as-is by
+        // BURST_ALIGN tasks to carry their BlockMatchAlign TileOffset array
+        // (small for any reasonable tile grid) - not exclusively a
+        // "checkpoint" despite the field name.
         std::string checkpointJson;
         // Transient - never persisted to the DB (GetTasksForStage() et al.
         // leave it default-empty). An executor's Execute(Task&, ...) can

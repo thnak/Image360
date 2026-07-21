@@ -488,6 +488,47 @@ namespace WindowsApp::Core
         return CreateTasksIfAbsent(seeds);
     }
 
+    bool ProjectManager::SeedBurstAlignTasks()
+    {
+        if (!m_db) return false;
+
+        std::vector<Task> seeds;
+        seeds.reserve(m_inputImages.size());
+        for (const auto& image : m_inputImages)
+        {
+            Task task;
+            task.stage = PipelineStage::BURST_ALIGN;
+            task.unitKind = "frame";
+            task.unitKey = std::to_string(image.id);
+            seeds.push_back(std::move(task));
+        }
+
+        return CreateTasksIfAbsent(seeds);
+    }
+
+    bool ProjectManager::SeedBurstMergeTasks()
+    {
+        if (!m_db) return false;
+
+        // Both safe to seed upfront alongside SeedBurstAlignTasks - unlike
+        // panorama's STAGE3_RENDER, neither depends on BURST_ALIGN's
+        // *results* (only that it has run first, which TaskScheduler's
+        // stage ordering already guarantees) - see
+        // docs/superpowers/plans/2026-07-21-mfnr-block-match-merge.md's
+        // Architecture note.
+        Task mergeTask;
+        mergeTask.stage = PipelineStage::BURST_MERGE;
+        mergeTask.unitKind = "output";
+        mergeTask.unitKey = "merged";
+
+        Task finishTask;
+        finishTask.stage = PipelineStage::BURST_FINISH;
+        finishTask.unitKind = "output";
+        finishTask.unitKey = "final";
+
+        return CreateTasksIfAbsent({ mergeTask, finishTask });
+    }
+
     bool ProjectManager::SeedAlignTasks()
     {
         if (!m_db) return false;

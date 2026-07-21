@@ -139,6 +139,24 @@ namespace WindowsApp { namespace Compute
             const double refMean[3], const double refStd[3]) override;
 
         // =====================================================================
+        // Burst mode (docs/COMPUTATIONAL_PHOTOGRAPHY.md SS3) - NOT_SUPPORTED
+        // on this backend as of
+        // docs/superpowers/plans/2026-07-21-mfnr-block-match-merge.md (CPU
+        // only so far) - a real, tracked gap, not a silently-missing
+        // feature. See CpuComputeBackend for the working implementation.
+        // =====================================================================
+        ComputeResult BlockMatchAlign(
+            const unsigned short* refData, const unsigned short* srcData,
+            int width, int height, int tileSize, int searchRadius,
+            TileOffset* outOffsets, int tilesX, int tilesY) override;
+
+        ComputeResult RobustMergeAccumulate(
+            const unsigned short* const* frames, int numFrames,
+            const TileOffset* const* perFrameOffsets,
+            int width, int height, int tileSize, int tilesX, int tilesY,
+            float sigma, unsigned short* output) override;
+
+        // =====================================================================
         // Tensor Core Operations (requires SM 7.0+)
         // =====================================================================
 

@@ -71,5 +71,47 @@ namespace WindowsApp { namespace Compute
             unsigned short* rgbInOut, int width, int height,
             const double srcMean[3], const double srcStd[3],
             const double refMean[3], const double refStd[3]) = 0;
+
+        // Burst-mode alignment (docs/COMPUTATIONAL_PHOTOGRAPHY.md SS2.1,
+        // SS3) - shared by all burst modes (MFNR/HDR+/Night Sight/Super
+        // Res Zoom). Non-overlapping tileSize x tileSize grid over
+        // refData/srcData (edge tiles clipped to width/height). For each
+        // tile, brute-force integer-pixel SAD search in srcData within
+        // [-searchRadius, +searchRadius] of the tile's position in
+        // refData, picking the minimum-SAD offset (ties broken toward the
+        // smallest |dx|+|dy|). outOffsets: caller-allocated,
+        // tilesX*tilesY entries, row-major (tilesX = ceil(width/tileSize),
+        // same for Y). refData/srcData: RGB48, same width/height.
+        // CPU-only as of the plan above - CUDA/Vulkan return
+        // NOT_SUPPORTED (a tracked gap, not silently missing).
+        virtual ComputeResult BlockMatchAlign(
+            const unsigned short* refData, const unsigned short* srcData,
+            int width, int height, int tileSize, int searchRadius,
+            TileOffset* outOffsets, int tilesX, int tilesY) = 0;
+
+        // MFNR's merge (docs/COMPUTATIONAL_PHOTOGRAPHY.md SS2.3) -
+        // reference-frame-relative Gaussian-weighted merge, NOT HDR+'s
+        // FFT/Wiener-shrinkage merge or Super-Res-Zoom's kernel-regression
+        // merge (those are separate, later ops per SS2.3's correction).
+        // frames[0] is the reference (implicit zero offset, weight 1.0 -
+        // must NOT have a corresponding perFrameOffsets entry);
+        // frames[1..numFrames) are aligned via perFrameOffsets[k-1]
+        // (BlockMatchAlign's output against frames[0], tilesX*tilesY
+        // entries each) - integer-pixel sampled (TileOffset has no
+        // fractional part in this phase; a future sub-pixel-refined
+        // BlockMatchAlign could add bilinear sampling here without an
+        // interface change), weighted by
+        // exp(-(sample-reference)^2 / (2*sigma^2)). A sample landing
+        // outside [0,width)x[0,height) after applying its tile's offset is
+        // excluded from that pixel's average entirely (never contributes
+        // a spurious zero - see RenderExecutor's CombineIgnoringGaps for
+        // the same "gap != black" principle). output: caller-allocated
+        // width*height*3 (the reference's own dimensions). CPU-only as of
+        // the plan above - CUDA/Vulkan return NOT_SUPPORTED.
+        virtual ComputeResult RobustMergeAccumulate(
+            const unsigned short* const* frames, int numFrames,
+            const TileOffset* const* perFrameOffsets,
+            int width, int height, int tileSize, int tilesX, int tilesY,
+            float sigma, unsigned short* output) = 0;
     };
 }}
