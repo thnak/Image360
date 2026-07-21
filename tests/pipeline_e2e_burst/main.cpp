@@ -1,17 +1,27 @@
-// Quality-gated end-to-end test for MFNR (docs/superpowers/plans/
-// 2026-07-21-mfnr-block-match-merge.md Task 6). Three scenarios, purely
+// Quality-gated end-to-end test for MFNR + HDR+ (docs/superpowers/plans/
+// 2026-07-21-mfnr-block-match-merge.md Task 6, extended by docs/
+// superpowers/plans/2026-07-21-hdrplus-tile-fft-merge.md Task 4). Purely
 // synthetic (no committed fixtures - unlike tests/pipeline_e2e's DNGs,
 // these frames are CfaType::STANDARD_RGB JPEGs generated in-process via
 // JpegCodec::Encode, sidestepping RAW/DNG-fixture complexity entirely
 // since this test is about the burst align/merge algorithms, not RAW
 // decode):
 //   1. Kernel-level BlockMatchAlign - recovers a known synthetic shift.
-//   2. Kernel-level RobustMergeAccumulate - merged output's PSNR vs. clean
-//      ground truth exceeds the reference frame's own PSNR (the direct
-//      proof merging reduces noise, not just "didn't crash").
-//   3. Full pipeline (ProjectManager -> PipelineDriver -> real
-//      BurstAlignExecutor/BurstMergeExecutor on CpuComputeBackend) -same
+//   2. Kernel-level RobustMergeAccumulate (MFNR) - merged output's PSNR
+//      vs. clean ground truth exceeds the reference frame's own PSNR (the
+//      direct proof merging reduces noise, not just "didn't crash").
+//   3. Full MFNR pipeline (ProjectManager -> PipelineDriver -> real
+//      BurstAlignExecutor/BurstMergeExecutor on CpuComputeBackend) - same
 //      PSNR gate, through the real JPEG-encode/decode round trip.
+//   4. Kernel-level TileFftMerge (HDR+) - same PSNR-improvement proof as
+//      Step 2, different merge algorithm.
+//   5. Kernel-level FuseTwoExposures (HDR+ finish) - fused output tracks
+//      the better-exposed synthetic exposure in both a dark and a bright
+//      region of a synthetic HDR scene.
+//   6. Full HDR+ pipeline - BURST_MERGE quality-gated like Step 3;
+//      BURST_FINISH checked structurally (tone mapping deliberately
+//      changes pixel values, so a PSNR-vs-linear-ground-truth comparison
+//      doesn't apply post-tone-map).
 
 #include "HeaderFiles/ProjectManager.h"
 #include "HeaderFiles/StorageEngine.h"
@@ -22,6 +32,8 @@
 #include "HeaderFiles/BurstCommon.h"
 #include "HeaderFiles/BlockMatchAlignKernel.h"
 #include "HeaderFiles/RobustMergeKernel.h"
+#include "HeaderFiles/TileFftMergeKernel.h"
+#include "HeaderFiles/ExposureFusionKernel.h"
 #include "HeaderFiles/CpuComputeBackend.h"
 #include "HeaderFiles/JpegCodec.h"
 
@@ -33,6 +45,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <random>
 #include <stop_token>
 #include <string>
@@ -454,6 +467,311 @@ namespace
         projectManager.CloseProject();
         fs::remove_all(tempDir, ec);
     }
+
+    void RunTileFftMergeKernelCheck()
+    {
+        std::cout << "\n=== Step 4: TileFftMerge (HDR+) reduces noise vs. a single frame ===" << std::endl;
+
+        constexpr int width = 64, height = 48;
+        constexpr int numFrames = 8;
+        constexpr double kNoiseSigma = 2000.0; // matches kHdrPlusNoiseVariance's scale
+
+        auto clean = GenerateCleanScene16(width, height, 555);
+
+        std::vector<std::vector<unsigned short>> frames(numFrames);
+        std::vector<int> shiftsX = { 0, 2, -3, 1, 4, -2, 3, -4 };
+        std::vector<int> shiftsY = { 0, -1, 2, -3, 1, 4, -2, 2 };
+        for (int k = 0; k < numFrames; ++k)
+        {
+            frames[k] = ShiftAndNoise16(clean, width, height, shiftsX[k], shiftsY[k], kNoiseSigma,
+                                         3000u + static_cast<unsigned>(k));
+        }
+
+        int tilesX = (width + kBurstTileSize - 1) / kBurstTileSize;
+        int tilesY = (height + kBurstTileSize - 1) / kBurstTileSize;
+
+        // Known offsets fed directly (bypassing BlockMatchAlign), same as
+        // Step 2 - isolates the merge kernel's own correctness.
+        std::vector<std::vector<TileOffset>> perFrameOffsets(numFrames - 1);
+        for (int k = 1; k < numFrames; ++k)
+        {
+            perFrameOffsets[k - 1].assign(static_cast<size_t>(tilesX) * tilesY, TileOffset{ shiftsX[k], shiftsY[k] });
+        }
+
+        std::vector<const unsigned short*> framePtrs;
+        for (const auto& f : frames) framePtrs.push_back(f.data());
+        std::vector<const TileOffset*> offsetPtrs;
+        for (const auto& o : perFrameOffsets) offsetPtrs.push_back(o.data());
+
+        std::vector<unsigned short> merged(clean.size());
+        bool ok = Kernels::TileFftMerge(framePtrs.data(), numFrames, offsetPtrs.data(), width, height,
+                                         kBurstTileSize, tilesX, tilesY, kHdrPlusNoiseVariance, merged.data());
+        Check(ok, "Kernels::TileFftMerge succeeds for a power-of-two tileSize");
+
+        double referencePsnr = Psnr16(frames[0], clean);
+        double mergedPsnr = Psnr16(merged, clean);
+        std::cout << "reference-frame-alone PSNR=" << referencePsnr << " dB, merged PSNR=" << mergedPsnr << " dB"
+                   << std::endl;
+
+        Check(mergedPsnr > referencePsnr, "TileFftMerge's output PSNR exceeds the reference frame's own PSNR");
+    }
+
+    // Left half deep shadow (near-black), right half a bright-but-not-
+    // fully-clipped highlight - two regions no single tone curve renders
+    // well simultaneously, the whole premise of exposure fusion.
+    std::vector<unsigned short> GenerateHdrTestScene(int width, int height, unsigned seed)
+    {
+        std::mt19937 rng(seed);
+        std::uniform_int_distribution<int> darkDist(500, 2500);
+        std::uniform_int_distribution<int> brightDist(40000, 58000);
+        std::vector<unsigned short> scene(static_cast<size_t>(width) * height * 3);
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                bool darkHalf = x < width / 2;
+                for (int c = 0; c < 3; ++c)
+                {
+                    int v = darkHalf ? darkDist(rng) : brightDist(rng);
+                    scene[(static_cast<size_t>(y) * width + x) * 3 + c] = static_cast<unsigned short>(v);
+                }
+            }
+        }
+        return scene;
+    }
+
+    // v' = 65535*(v/65535)^gamma - mirrors BurstMergeExecutor's own
+    // (anonymous-namespace, non-exported) ApplyToneCurve exactly, so this
+    // test exercises FuseTwoExposures against the same synthetic-exposure
+    // shape the real HDR_PLUS finish path produces.
+    std::vector<unsigned short> ApplyToneCurveForTest(const std::vector<unsigned short>& src, float gamma)
+    {
+        std::vector<unsigned short> out(src.size());
+        for (size_t i = 0; i < src.size(); ++i)
+        {
+            float normalized = static_cast<float>(src[i]) / 65535.0f;
+            float mapped = std::pow((std::max)(0.0f, normalized), gamma) * 65535.0f;
+            out[i] = static_cast<unsigned short>((std::max)(0.0f, (std::min)(65535.0f, mapped)) + 0.5f);
+        }
+        return out;
+    }
+
+    void RunFuseTwoExposuresKernelCheck()
+    {
+        std::cout << "\n=== Step 5: FuseTwoExposures (HDR+ finish) favors the better-exposed source per region ==="
+                   << std::endl;
+
+        constexpr int width = 64, height = 48;
+        auto hdrScene = GenerateHdrTestScene(width, height, 777);
+
+        // kHdrPlusBrightGamma (<1) lifts shadows - the better-exposed
+        // rendering of the dark half. kHdrPlusDarkGamma (>1) compresses
+        // highlights - the better-exposed rendering of the bright half.
+        auto brightExposure = ApplyToneCurveForTest(hdrScene, kHdrPlusBrightGamma);
+        auto darkExposure = ApplyToneCurveForTest(hdrScene, kHdrPlusDarkGamma);
+
+        std::vector<unsigned short> fused;
+        Kernels::ExposureFusion::FuseTwoExposures(brightExposure.data(), darkExposure.data(), width, height,
+                                                    Kernels::ExposureFusion::kDefaultNumBands, fused);
+
+        // Only interior columns well away from the dark/bright midpoint -
+        // the pyramid blend's blur legitimately mixes both regions' weight
+        // near the transition, so evaluating right at the boundary isn't a
+        // fair test of per-region behavior.
+        auto regionDiff = [&](int xStart, int xEnd, const std::vector<unsigned short>& candidate)
+        {
+            double sum = 0.0;
+            int count = 0;
+            for (int y = 0; y < height; ++y)
+            {
+                for (int x = xStart; x < xEnd; ++x)
+                {
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        size_t idx = (static_cast<size_t>(y) * width + x) * 3 + c;
+                        sum += std::fabs(static_cast<double>(fused[idx]) - static_cast<double>(candidate[idx]));
+                        ++count;
+                    }
+                }
+            }
+            return sum / count;
+        };
+
+        int darkRegionEnd = width / 4;
+        int brightRegionStart = (3 * width) / 4;
+
+        double darkRegionVsBright = regionDiff(0, darkRegionEnd, brightExposure);
+        double darkRegionVsDark = regionDiff(0, darkRegionEnd, darkExposure);
+        double brightRegionVsBright = regionDiff(brightRegionStart, width, brightExposure);
+        double brightRegionVsDark = regionDiff(brightRegionStart, width, darkExposure);
+
+        std::cout << "dark region:   |fused-brightExposure|=" << darkRegionVsBright
+                   << " |fused-darkExposure|=" << darkRegionVsDark << std::endl;
+        std::cout << "bright region: |fused-brightExposure|=" << brightRegionVsBright
+                   << " |fused-darkExposure|=" << brightRegionVsDark << std::endl;
+
+        Check(darkRegionVsBright < darkRegionVsDark,
+              "in the dark region, fused output tracks the shadow-lifted (bright) exposure");
+        Check(brightRegionVsDark < brightRegionVsBright,
+              "in the bright region, fused output tracks the highlight-compressed (dark) exposure");
+    }
+
+    void RunFullPipelineHdrPlusScenario()
+    {
+        std::cout << "\n=== Step 6: full HDR+ pipeline (project -> align -> merge -> finish) ===" << std::endl;
+
+        // Same rationale as Step 3's width/height choice - keeps the
+        // boundary-tile fraction close to what a real image sees.
+        constexpr int width = 320, height = 240;
+        constexpr int numFrames = 6;
+        constexpr double kNoiseSigma8 = 8.0;
+
+        auto clean16 = GenerateCleanScene16(width, height, 888);
+
+        std::error_code ec;
+        fs::path tempDir = fs::temp_directory_path() / "image360_pipeline_e2e_hdrplus";
+        fs::remove_all(tempDir, ec);
+        fs::create_directories(tempDir, ec);
+        Check(!ec, "create temp project directory (HDR+)");
+
+        auto jpegCodec = std::make_shared<JpegCodec>();
+        Check(jpegCodec->Initialize() == ComputeResult::SUCCESS, "JpegCodec::Initialize (HDR+)");
+
+        std::vector<int> shiftsX = { 0, 2, -3, 1, 4, -2 };
+        std::vector<int> shiftsY = { 0, -1, 2, -3, 1, 4 };
+
+        ProjectManager projectManager;
+        fs::path dbPath = tempDir / "hdrplus_e2e.vfp";
+        std::wstring wDbPath = Utf8ToWide(dbPath.string());
+        Check(projectManager.CreateBurstProject(wDbPath, BurstMode::HDR_PLUS),
+              "ProjectManager::CreateBurstProject(HDR_PLUS)");
+
+        std::vector<unsigned short> frame0Reconstructed16;
+
+        for (int k = 0; k < numFrames; ++k)
+        {
+            auto frame16 = ShiftAndNoise16(clean16, width, height, shiftsX[k], shiftsY[k], 0.0, 6000u + static_cast<unsigned>(k));
+            auto frame8 = NarrowTo8(frame16);
+
+            std::mt19937 rng(7000u + static_cast<unsigned>(k));
+            std::normal_distribution<double> noise(0.0, kNoiseSigma8);
+            for (auto& v : frame8)
+                v = static_cast<unsigned char>(std::clamp(static_cast<double>(v) + noise(rng), 0.0, 255.0));
+
+            if (k == 0)
+            {
+                frame0Reconstructed16.resize(frame8.size());
+                for (size_t i = 0; i < frame8.size(); ++i)
+                    frame0Reconstructed16[i] = static_cast<unsigned short>(frame8[i]) * 257;
+            }
+
+            std::vector<unsigned char> jpegBytes;
+            Check(jpegCodec->Encode(frame8.data(), width, height, 95, jpegBytes) == ComputeResult::SUCCESS,
+                  "JpegCodec::Encode synthetic frame (HDR+)");
+
+            fs::path framePath = tempDir / ("frame_" + std::to_string(k) + ".jpg");
+            std::ofstream out(framePath, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(jpegBytes.data()), static_cast<std::streamsize>(jpegBytes.size()));
+            out.close();
+
+            Check(projectManager.AddInputImage(Utf8ToWide(framePath.string()), Homography{}, CfaType::STANDARD_RGB),
+                  "ProjectManager::AddInputImage (HDR+ frame)");
+        }
+        Check(projectManager.GetInputImages().size() == static_cast<size_t>(numFrames), "all HDR+ burst frames registered");
+
+        Check(projectManager.SeedBurstAlignTasks(), "ProjectManager::SeedBurstAlignTasks (HDR+)");
+        Check(projectManager.SeedBurstMergeTasks(), "ProjectManager::SeedBurstMergeTasks (HDR+)");
+
+        StorageEngine storageEngine;
+        Check(storageEngine.Open(Utf8ToWide(tempDir.string()), L"hdrplus_e2e", projectManager), "StorageEngine::Open (HDR+)");
+
+        auto computeBackend = std::make_shared<CpuComputeBackend>();
+        Check(computeBackend->Initialize() == ComputeResult::SUCCESS, "CpuComputeBackend::Initialize (HDR+)");
+
+        PipelineDriver driver;
+        driver.Initialize(
+            [](PipelineStage stage, float progress)
+            { std::cout << "progress: stage=" << static_cast<int>(stage) << " overall=" << progress << std::endl; },
+            [](const std::wstring& msg) { std::wcerr << L"log: " << msg << std::endl; });
+
+        driver.RegisterExecutor(PipelineStage::BURST_ALIGN,
+            std::make_shared<BurstAlignExecutor>(projectManager, storageEngine, computeBackend, jpegCodec));
+        auto mergeExecutor = std::make_shared<BurstMergeExecutor>(projectManager, storageEngine, computeBackend);
+        driver.RegisterExecutor(PipelineStage::BURST_MERGE, mergeExecutor);
+        driver.RegisterExecutor(PipelineStage::BURST_FINISH, mergeExecutor);
+
+        std::stop_source stopSource;
+        bool ranOk = driver.Run(projectManager, stopSource.get_token());
+        Check(ranOk, "PipelineDriver::Run completes BURST_ALIGN->BURST_MERGE->BURST_FINISH (HDR+)");
+        Check(driver.GetCurrentStage() == PipelineStage::COMPLETED, "PipelineDriver ends in COMPLETED stage (HDR+)");
+
+        if (!ranOk)
+        {
+            storageEngine.Close();
+            projectManager.CloseProject();
+            fs::remove_all(tempDir, ec);
+            return;
+        }
+
+        std::vector<Task> mergeTasks = projectManager.GetTasksForStage(PipelineStage::BURST_MERGE);
+        Check(mergeTasks.size() == 1 && mergeTasks[0].status == TaskStatus::COMPLETED
+                  && mergeTasks[0].outputBlobId.has_value(),
+              "BURST_MERGE task completed with an output blob (HDR+)");
+
+        std::optional<PixelBuffer> mergedBuffer;
+        if (!mergeTasks.empty() && mergeTasks[0].outputBlobId.has_value())
+            mergedBuffer = storageEngine.ReadPixelBuffer(*mergeTasks[0].outputBlobId);
+        Check(mergedBuffer.has_value(), "read back BURST_MERGE's output PixelBuffer (HDR+)");
+
+        if (mergedBuffer.has_value())
+        {
+            Check(mergedBuffer->width == width && mergedBuffer->height == height,
+                  "BURST_MERGE output dimensions match the burst frames (HDR+)");
+
+            // Quality-gate BURST_MERGE (TileFftMerge's own output), not
+            // BURST_FINISH - the finish stage deliberately changes pixel
+            // values via tone mapping, so a PSNR-vs-linear-ground-truth
+            // comparison doesn't apply post-tone-map (see this test's
+            // header comment and the plan's Task 4).
+            double referencePsnr = Psnr16(frame0Reconstructed16, clean16);
+            double mergedPsnr = Psnr16(mergedBuffer->data, clean16);
+            std::cout << "reference-frame PSNR=" << referencePsnr << " dB, BURST_MERGE output PSNR=" << mergedPsnr
+                       << " dB" << std::endl;
+
+            constexpr double kMinAcceptablePsnrDb = 26.0;
+            Check(mergedPsnr >= kMinAcceptablePsnrDb,
+                  "BURST_MERGE output's PSNR against the clean scene meets the quality bar");
+            Check(mergedPsnr > referencePsnr,
+                  "BURST_MERGE output's PSNR exceeds the single reference frame's own PSNR");
+        }
+
+        std::vector<Task> finishTasks = projectManager.GetTasksForStage(PipelineStage::BURST_FINISH);
+        Check(finishTasks.size() == 1 && finishTasks[0].status == TaskStatus::COMPLETED
+                  && finishTasks[0].outputBlobId.has_value(),
+              "BURST_FINISH task completed with an output blob (HDR+)");
+
+        if (!finishTasks.empty() && finishTasks[0].outputBlobId.has_value() && mergedBuffer.has_value())
+        {
+            auto finalBuffer = storageEngine.ReadPixelBuffer(*finishTasks[0].outputBlobId);
+            Check(finalBuffer.has_value(), "read back BURST_FINISH's output PixelBuffer (HDR+)");
+
+            if (finalBuffer.has_value())
+            {
+                Check(finalBuffer->width == width && finalBuffer->height == height,
+                      "BURST_FINISH output dimensions match the burst frames (HDR+)");
+
+                // Proves the tone-map transform actually ran (not a hidden
+                // passthrough) - MFNR's finish is legitimately byte-
+                // identical to its merge output; HDR+'s must not be.
+                Check(finalBuffer->data != mergedBuffer->data,
+                      "BURST_FINISH's tone-mapped output differs from BURST_MERGE's output");
+            }
+        }
+
+        storageEngine.Close();
+        projectManager.CloseProject();
+        fs::remove_all(tempDir, ec);
+    }
 }
 
 int main()
@@ -461,6 +779,9 @@ int main()
     RunBlockMatchAlignKernelCheck();
     RunRobustMergeKernelCheck();
     RunFullPipelineQualityScenario();
+    RunTileFftMergeKernelCheck();
+    RunFuseTwoExposuresKernelCheck();
+    RunFullPipelineHdrPlusScenario();
 
     if (g_failures == 0)
     {

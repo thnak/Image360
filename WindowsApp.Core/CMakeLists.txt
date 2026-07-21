@@ -29,8 +29,10 @@ set(CORE_SOURCES
     SourceFiles/RgbToGray.cpp
     SourceFiles/BurstAlignExecutor.cpp
     SourceFiles/BurstMergeExecutor.cpp
+    SourceFiles/ExposureFusionKernel.cpp
     SourceFiles/RobustMergeKernel.cpp
     SourceFiles/SeamBlend.cpp
+    SourceFiles/TileFftMergeKernel.cpp
     SourceFiles/StorageEngine.cpp
     SourceFiles/TaskScheduler.cpp
     SourceFiles/TextEncoding.cpp

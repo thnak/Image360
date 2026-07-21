@@ -156,6 +156,14 @@ namespace WindowsApp { namespace Compute
             int width, int height, int tileSize, int tilesX, int tilesY,
             float sigma, unsigned short* output) override;
 
+        // NOT_SUPPORTED on this backend as of docs/superpowers/plans/
+        // 2026-07-21-hdrplus-tile-fft-merge.md (CPU only so far).
+        ComputeResult TileFftMerge(
+            const unsigned short* const* frames, int numFrames,
+            const TileOffset* const* perFrameOffsets,
+            int width, int height, int tileSize, int tilesX, int tilesY,
+            float noiseVariance, unsigned short* output) override;
+
         // =====================================================================
         // Tensor Core Operations (requires SM 7.0+)
         // =====================================================================

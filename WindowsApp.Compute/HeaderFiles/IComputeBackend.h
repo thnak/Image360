@@ -113,5 +113,31 @@ namespace WindowsApp { namespace Compute
             const TileOffset* const* perFrameOffsets,
             int width, int height, int tileSize, int tilesX, int tilesY,
             float sigma, unsigned short* output) = 0;
+
+        // HDR+'s merge (docs/COMPUTATIONAL_PHOTOGRAPHY.md SS2.1) - per-tile,
+        // per-frequency-bin Wiener shrinkage of each alternate frame's
+        // spectral DIFFERENCE from the reference, NOT RobustMergeAccumulate's
+        // spatial-domain robust average (a genuinely different algorithm,
+        // per SS2.3's correction). Same frames[0]-is-reference/
+        // perFrameOffsets convention as RobustMergeAccumulate. tileSize
+        // MUST be a power of two (the implementation is a radix-2 FFT) -
+        // INVALID_PARAM otherwise. For each tile/channel: FFT the
+        // reference tile and each aligned alternate tile (clamp-to-edge
+        // sampled, both for edge tiles and for an offset that pushes the
+        // sampling window outside bounds - never zero-padded, to avoid
+        // FFT ringing from a hard edge-to-zero transition), shrink each
+        // alternate's per-bin difference from the reference by
+        // |D(w)|^2 / (|D(w)|^2 + noiseVariance), average across alternates,
+        // add back onto the reference spectrum, inverse-FFT. noiseVariance
+        // is the shrinkage's fixed c*sigma^2 term (not per-ISO calibrated -
+        // see docs/superpowers/plans/2026-07-21-hdrplus-tile-fft-merge.md
+        // SS9). output: caller-allocated width*height*3 (the reference's
+        // own dimensions). CPU-only as of that plan - CUDA/Vulkan return
+        // NOT_SUPPORTED.
+        virtual ComputeResult TileFftMerge(
+            const unsigned short* const* frames, int numFrames,
+            const TileOffset* const* perFrameOffsets,
+            int width, int height, int tileSize, int tilesX, int tilesY,
+            float noiseVariance, unsigned short* output) = 0;
     };
 }}

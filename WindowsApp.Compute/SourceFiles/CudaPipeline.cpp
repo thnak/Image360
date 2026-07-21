@@ -814,6 +814,18 @@ namespace WindowsApp { namespace Compute
         return ComputeResult::NOT_SUPPORTED;
     }
 
+    ComputeResult CudaPipeline::TileFftMerge(
+        const unsigned short* const* /*frames*/, int /*numFrames*/,
+        const TileOffset* const* /*perFrameOffsets*/,
+        int /*width*/, int /*height*/, int /*tileSize*/, int /*tilesX*/, int /*tilesY*/,
+        float /*noiseVariance*/, unsigned short* /*output*/)
+    {
+        SetError("TileFftMerge not implemented on the CUDA backend yet "
+                 "(tracked gap, see docs/superpowers/plans/2026-07-21-hdrplus-tile-fft-merge.md Task 1) "
+                 "- use the CPU backend for burst-mode projects.");
+        return ComputeResult::NOT_SUPPORTED;
+    }
+
     const char* CudaPipeline::GetLastError() const
     {
         return m_lastError;
