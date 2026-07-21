@@ -45,8 +45,25 @@ namespace WindowsApp::Core
 
         // Database operations
         bool CreateProject(const std::wstring& dbPath, int totalWidth, int totalHeight, int chunkSize = 4096);
+
+        // Burst-mode entry point (docs/COMPUTATIONAL_PHOTOGRAPHY.md SS3, SS8
+        // Phase 0) - deliberately separate from CreateProject rather than an
+        // overload, since a burst project has no chunk grid (one merged
+        // output frame, not a tiled canvas): totalWidth/totalHeight/
+        // chunkSize would be meaningless parameters for it. GetTotalWidth/
+        // GetTotalHeight report 0 until a real burst executor sets them
+        // from the first ingested frame - out of scope here.
+        bool CreateBurstProject(const std::wstring& dbPath, BurstMode mode);
+
         bool LoadProject(const std::wstring& dbPath);
         void CloseProject();
+
+        // A freshly-constructed ProjectManager (no project loaded yet) and
+        // every project created before this existed report PANORAMA/NONE -
+        // the project_metadata table simply has no project_type/burst_mode
+        // key, so no .vfp migration was needed to add these.
+        ProjectType GetProjectType() const { return m_projectType; }
+        BurstMode GetBurstMode() const { return m_burstMode; }
 
         bool AddInputImage(const std::wstring& filePath, const Homography& h, CfaType cfaType = CfaType::BAYER);
         bool UpdateImageGain(int imageId, float gain);
@@ -115,10 +132,21 @@ namespace WindowsApp::Core
         std::wstring m_projectPath;
         int m_totalWidth = 0;
         int m_totalHeight = 0;
+        ProjectType m_projectType = ProjectType::PANORAMA;
+        BurstMode m_burstMode = BurstMode::NONE;
         std::vector<ChunkModel> m_chunks;
         std::vector<InputImageModel> m_inputImages;
 
         bool ExecuteNonQuery(const std::string& sql);
+        // Shared by CreateProject/CreateBurstProject: opens the DB, sets
+        // WAL/synchronous pragmas, creates every table both project types
+        // need (chunks/chunk_contributors stay unused/empty for a burst
+        // project, same as tasks/blob_directory stay unused/empty for a
+        // never-run panorama project - creating all tables unconditionally
+        // is simpler than a schema that varies by ProjectType). Returns
+        // false (and leaves m_db closed) on any failure, matching
+        // CreateProject's existing error contract.
+        bool OpenAndCreateSchema(const std::wstring& dbPath);
         void LoadMetadata();
         void LoadChunks();
         void LoadInputImages();

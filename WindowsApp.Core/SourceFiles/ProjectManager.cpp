@@ -18,6 +18,9 @@ namespace WindowsApp::Core
             case PipelineStage::STAGE1_ALIGN:    return "STAGE1_ALIGN";
             case PipelineStage::STAGE2_OPTIMIZE: return "STAGE2_OPTIMIZE";
             case PipelineStage::STAGE3_RENDER:   return "STAGE3_RENDER";
+            case PipelineStage::BURST_ALIGN:     return "BURST_ALIGN";
+            case PipelineStage::BURST_MERGE:     return "BURST_MERGE";
+            case PipelineStage::BURST_FINISH:    return "BURST_FINISH";
             case PipelineStage::COMPLETED:       return "COMPLETED";
             case PipelineStage::CANCELLED:       return "CANCELLED";
             case PipelineStage::FAILED:          return "FAILED";
@@ -31,10 +34,51 @@ namespace WindowsApp::Core
             if (s == "STAGE1_ALIGN")    return PipelineStage::STAGE1_ALIGN;
             if (s == "STAGE2_OPTIMIZE") return PipelineStage::STAGE2_OPTIMIZE;
             if (s == "STAGE3_RENDER")   return PipelineStage::STAGE3_RENDER;
+            if (s == "BURST_ALIGN")     return PipelineStage::BURST_ALIGN;
+            if (s == "BURST_MERGE")     return PipelineStage::BURST_MERGE;
+            if (s == "BURST_FINISH")    return PipelineStage::BURST_FINISH;
             if (s == "COMPLETED")       return PipelineStage::COMPLETED;
             if (s == "CANCELLED")       return PipelineStage::CANCELLED;
             if (s == "FAILED")          return PipelineStage::FAILED;
             return PipelineStage::IDLE;
+        }
+
+        const char* ToString(ProjectType type)
+        {
+            switch (type)
+            {
+            case ProjectType::PANORAMA: return "PANORAMA";
+            case ProjectType::BURST:    return "BURST";
+            }
+            return "PANORAMA";
+        }
+
+        ProjectType ParseProjectType(const std::string& s)
+        {
+            if (s == "BURST") return ProjectType::BURST;
+            return ProjectType::PANORAMA;
+        }
+
+        const char* ToString(BurstMode mode)
+        {
+            switch (mode)
+            {
+            case BurstMode::NONE:        return "NONE";
+            case BurstMode::MFNR:        return "MFNR";
+            case BurstMode::HDR_PLUS:    return "HDR_PLUS";
+            case BurstMode::NIGHT_SIGHT: return "NIGHT_SIGHT";
+            case BurstMode::SUPER_RES:   return "SUPER_RES";
+            }
+            return "NONE";
+        }
+
+        BurstMode ParseBurstMode(const std::string& s)
+        {
+            if (s == "MFNR")        return BurstMode::MFNR;
+            if (s == "HDR_PLUS")    return BurstMode::HDR_PLUS;
+            if (s == "NIGHT_SIGHT") return BurstMode::NIGHT_SIGHT;
+            if (s == "SUPER_RES")   return BurstMode::SUPER_RES;
+            return BurstMode::NONE;
         }
 
         const char* ToString(TaskStatus status)
@@ -105,7 +149,7 @@ namespace WindowsApp::Core
         return 1024;
     }
 
-    bool ProjectManager::CreateProject(const std::wstring& dbPath, int totalWidth, int totalHeight, int chunkSize)
+    bool ProjectManager::OpenAndCreateSchema(const std::wstring& dbPath)
     {
         CloseProject();
 
@@ -123,7 +167,10 @@ namespace WindowsApp::Core
         ExecuteNonQuery("PRAGMA journal_mode=WAL;");
         ExecuteNonQuery("PRAGMA synchronous=NORMAL;");
 
-        // Create schema
+        // Create schema - every table both ProjectTypes need. chunks/
+        // chunk_contributors stay unused/empty for a burst project, same as
+        // tasks/blob_directory stay unused/empty for a never-run panorama
+        // project - simpler than a schema that varies by ProjectType.
         const char* schema = R"(
             CREATE TABLE IF NOT EXISTS project_metadata (
                 key TEXT PRIMARY KEY,
@@ -185,6 +232,14 @@ namespace WindowsApp::Core
             return false;
         }
 
+        return true;
+    }
+
+    bool ProjectManager::CreateProject(const std::wstring& dbPath, int totalWidth, int totalHeight, int chunkSize)
+    {
+        if (!OpenAndCreateSchema(dbPath))
+            return false;
+
         // Store metadata
         std::string sql = "INSERT OR REPLACE INTO project_metadata (key, value) VALUES ('total_width', '"
             + std::to_string(totalWidth) + "');";
@@ -193,6 +248,11 @@ namespace WindowsApp::Core
         sql = "INSERT OR REPLACE INTO project_metadata (key, value) VALUES ('total_height', '"
             + std::to_string(totalHeight) + "');";
         ExecuteNonQuery(sql);
+
+        ExecuteNonQuery("INSERT OR REPLACE INTO project_metadata (key, value) VALUES ('project_type', 'PANORAMA');");
+        ExecuteNonQuery("INSERT OR REPLACE INTO project_metadata (key, value) VALUES ('burst_mode', 'NONE');");
+        m_projectType = ProjectType::PANORAMA;
+        m_burstMode = BurstMode::NONE;
 
         m_projectPath = dbPath;
         m_totalWidth = totalWidth;
@@ -226,6 +286,30 @@ namespace WindowsApp::Core
                 m_chunks.push_back(std::move(chunk));
             }
         }
+
+        return true;
+    }
+
+    bool ProjectManager::CreateBurstProject(const std::wstring& dbPath, BurstMode mode)
+    {
+        if (!OpenAndCreateSchema(dbPath))
+            return false;
+
+        ExecuteNonQuery("INSERT OR REPLACE INTO project_metadata (key, value) VALUES ('project_type', 'BURST');");
+        ExecuteNonQuery(std::string("INSERT OR REPLACE INTO project_metadata (key, value) VALUES ('burst_mode', '")
+            + ToString(mode) + "');");
+
+        m_projectType = ProjectType::BURST;
+        m_burstMode = mode;
+        m_projectPath = dbPath;
+        // No chunk grid: a burst project's output is one merged frame, not
+        // a tiled canvas. total_width/total_height stay 0 (and unwritten to
+        // project_metadata) until a real burst executor sets them from the
+        // first ingested frame - out of scope for this foundation slice.
+        m_totalWidth = 0;
+        m_totalHeight = 0;
+        m_chunks.clear();
+        m_inputImages.clear();
 
         return true;
     }
@@ -301,6 +385,8 @@ namespace WindowsApp::Core
         m_projectPath.clear();
         m_totalWidth = 0;
         m_totalHeight = 0;
+        m_projectType = ProjectType::PANORAMA;
+        m_burstMode = BurstMode::NONE;
         m_chunks.clear();
         m_inputImages.clear();
     }
@@ -805,6 +891,11 @@ namespace WindowsApp::Core
                     std::string k(key);
                     if (k == "total_width") m_totalWidth = std::stoi(value);
                     else if (k == "total_height") m_totalHeight = std::stoi(value);
+                    // Missing key (project created before ProjectType/
+                    // BurstMode existed) leaves the constructor defaults
+                    // (PANORAMA/NONE) untouched - no migration needed.
+                    else if (k == "project_type") m_projectType = ParseProjectType(value);
+                    else if (k == "burst_mode") m_burstMode = ParseBurstMode(value);
                 }
             }
         }

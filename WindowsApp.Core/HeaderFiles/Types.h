@@ -41,9 +41,46 @@ namespace WindowsApp::Core
         STAGE1_ALIGN,
         STAGE2_OPTIMIZE,
         STAGE3_RENDER,
+        // Burst-mode pipeline family (docs/COMPUTATIONAL_PHOTOGRAPHY.md SS3,
+        // SS8 Phase 0) - align + merge + finish, driven by PipelineDriver
+        // when ProjectManager::GetProjectType() == ProjectType::BURST
+        // instead of the four STAGE*/panorama stages above. Which merge
+        // algorithm BURST_MERGE actually runs (robust weighted merge for
+        // MFNR, FFT/Wiener-shrinkage for HDR+, structure-tensor kernel
+        // regression for Night Sight/Super Res Zoom) is BurstMode-selected
+        // executor logic, not a separate stage - see
+        // docs/COMPUTATIONAL_PHOTOGRAPHY.md SS2.3's correction.
+        BURST_ALIGN,
+        BURST_MERGE,
+        BURST_FINISH,
         COMPLETED,
         CANCELLED,
         FAILED
+    };
+
+    // A project's pipeline family - selects which PipelineStage sequence
+    // PipelineDriver::Run drives. Every project created before this existed
+    // has no 'project_type' key in its project_metadata table and loads as
+    // PANORAMA (ProjectManager's constructor default), so no migration is
+    // needed for existing .vfp files.
+    enum class ProjectType
+    {
+        PANORAMA,
+        BURST
+    };
+
+    // Which burst algorithm BURST_MERGE's registered executor should run.
+    // NONE is what a PANORAMA project reports (not a 5th "no mode" burst
+    // mode) - kept as a separate enum from ProjectType rather than folding
+    // both into one 5-way enum, so callers never have to special-case which
+    // values of one enum "actually mean panorama."
+    enum class BurstMode
+    {
+        NONE,
+        MFNR,
+        HDR_PLUS,
+        NIGHT_SIGHT,
+        SUPER_RES
     };
 
     enum class TaskStatus

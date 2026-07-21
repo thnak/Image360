@@ -13,12 +13,15 @@
 #include "HeaderFiles/MedianStackKernels.h"
 #include "HeaderFiles/WarpPerspectiveKernels.h"
 #include "HeaderFiles/BayerDemosaicKernels.h"
+#include "HeaderFiles/PipelineDriver.h"
+#include "HeaderFiles/ITaskExecutor.h"
 
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <vector>
 
@@ -290,6 +293,146 @@ namespace
             else std::cout << "SKIP: BayerDemosaic AVX512 cross-check (CPU lacks AVX512)" << std::endl;
         }
     }
+
+    // Minimal ITaskExecutor for the burst-pipeline-foundation checks below
+    // (docs/superpowers/plans/2026-07-21-burst-pipeline-foundation.md) -
+    // WindowsApp.Tests/StubTaskExecutor.h isn't usable here (MSBuild-only
+    // project), so this is a small self-contained equivalent: records which
+    // stage each executed task belonged to (mutex-guarded - TaskScheduler
+    // dispatches tasks within one stage concurrently) and always succeeds.
+    class RecordingStubExecutor : public ITaskExecutor
+    {
+    public:
+        explicit RecordingStubExecutor(PipelineStage stage) : m_stage(stage) {}
+
+        bool Execute(Task& /*task*/, CancellationToken /*token*/) override
+        {
+            std::lock_guard<std::mutex> lock(s_sharedMutex);
+            s_sharedOrder.push_back(m_stage);
+            return true;
+        }
+
+        static std::vector<PipelineStage> TakeSharedOrder()
+        {
+            std::lock_guard<std::mutex> lock(s_sharedMutex);
+            return s_sharedOrder;
+        }
+        static void ResetSharedOrder()
+        {
+            std::lock_guard<std::mutex> lock(s_sharedMutex);
+            s_sharedOrder.clear();
+        }
+
+    private:
+        PipelineStage m_stage;
+        static inline std::mutex s_sharedMutex;
+        static inline std::vector<PipelineStage> s_sharedOrder;
+    };
+
+    // docs/superpowers/plans/2026-07-21-burst-pipeline-foundation.md Task 4:
+    // proves the Task/TaskScheduler/PipelineDriver machinery (already
+    // production-proven for the panorama pipeline) generalizes to a second
+    // pipeline family with zero new kernels - project-type round-trip plus
+    // a real end-to-end burst stage sequence run via a stub executor.
+    void RunBurstPipelineFoundationChecks()
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::path tempDir = fs::temp_directory_path() / "image360_burst_foundation_smoke";
+        fs::remove_all(tempDir, ec);
+        fs::create_directories(tempDir, ec);
+
+        // Step 2: panorama default stays default (no migration needed for
+        // pre-existing .vfp files with no project_type/burst_mode key).
+        {
+            fs::path dbPath = tempDir / "panorama.vfp";
+            ProjectManager panoramaProject;
+            Check(panoramaProject.CreateProject(Utf8ToWide(dbPath.string()), 512, 256, 256),
+                  "CreateProject (panorama) succeeds");
+            Check(panoramaProject.GetProjectType() == ProjectType::PANORAMA,
+                  "Panorama project reports ProjectType::PANORAMA");
+            Check(panoramaProject.GetBurstMode() == BurstMode::NONE,
+                  "Panorama project reports BurstMode::NONE");
+        }
+
+        // Step 1: burst project type/mode round-trips through a real
+        // close+reopen, not just the in-memory value set at create time.
+        {
+            fs::path dbPath = tempDir / "burst.vfp";
+            std::wstring wDbPath = Utf8ToWide(dbPath.string());
+            {
+                ProjectManager burstProject;
+                Check(burstProject.CreateBurstProject(wDbPath, BurstMode::MFNR),
+                      "CreateBurstProject(MFNR) succeeds");
+                Check(burstProject.GetProjectType() == ProjectType::BURST,
+                      "Burst project reports ProjectType::BURST immediately after create");
+                Check(burstProject.GetBurstMode() == BurstMode::MFNR,
+                      "Burst project reports BurstMode::MFNR immediately after create");
+            }
+            {
+                ProjectManager reopened;
+                Check(reopened.LoadProject(wDbPath), "LoadProject re-opens a persisted burst project");
+                Check(reopened.GetProjectType() == ProjectType::BURST,
+                      "Reloaded burst project still reports ProjectType::BURST");
+                Check(reopened.GetBurstMode() == BurstMode::MFNR,
+                      "Reloaded burst project still reports BurstMode::MFNR");
+            }
+        }
+
+        // Step 3: the burst stage sequence (BURST_ALIGN -> BURST_MERGE ->
+        // BURST_FINISH) actually runs end to end through PipelineDriver,
+        // in order, with zero panorama-specific stages ever dispatched.
+        {
+            fs::path dbPath = tempDir / "burst_run.vfp";
+            ProjectManager burstProject;
+            Check(burstProject.CreateBurstProject(Utf8ToWide(dbPath.string()), BurstMode::HDR_PLUS),
+                  "CreateBurstProject(HDR_PLUS) succeeds (run scenario)");
+
+            Task alignTask;
+            alignTask.stage = PipelineStage::BURST_ALIGN;
+            alignTask.unitKind = "frame";
+            alignTask.unitKey = "frame_0";
+
+            Task mergeTask;
+            mergeTask.stage = PipelineStage::BURST_MERGE;
+            mergeTask.unitKind = "frame";
+            mergeTask.unitKey = "frame_0";
+
+            Task finishTask;
+            finishTask.stage = PipelineStage::BURST_FINISH;
+            finishTask.unitKind = "frame";
+            finishTask.unitKey = "frame_0";
+
+            Check(burstProject.CreateTasksIfAbsent({ alignTask, mergeTask, finishTask }),
+                  "CreateTasksIfAbsent seeds one task per BURST_* stage");
+
+            RecordingStubExecutor::ResetSharedOrder();
+            PipelineDriver driver;
+            driver.Initialize(nullptr, nullptr);
+            driver.RegisterExecutor(PipelineStage::BURST_ALIGN, std::make_shared<RecordingStubExecutor>(PipelineStage::BURST_ALIGN));
+            driver.RegisterExecutor(PipelineStage::BURST_MERGE, std::make_shared<RecordingStubExecutor>(PipelineStage::BURST_MERGE));
+            driver.RegisterExecutor(PipelineStage::BURST_FINISH, std::make_shared<RecordingStubExecutor>(PipelineStage::BURST_FINISH));
+
+            std::stop_source stopSource;
+            bool ok = driver.Run(burstProject, stopSource.get_token());
+            Check(ok, "PipelineDriver::Run completes the burst stage sequence");
+
+            std::vector<PipelineStage> order = RecordingStubExecutor::TakeSharedOrder();
+            std::vector<PipelineStage> expected = {
+                PipelineStage::BURST_ALIGN, PipelineStage::BURST_MERGE, PipelineStage::BURST_FINISH
+            };
+            Check(order == expected, "Burst stages execute in order: BURST_ALIGN, BURST_MERGE, BURST_FINISH");
+
+            for (PipelineStage stage : { PipelineStage::BURST_ALIGN, PipelineStage::BURST_MERGE, PipelineStage::BURST_FINISH })
+            {
+                std::vector<Task> tasks = burstProject.GetTasksForStage(stage);
+                Check(tasks.size() == 1 && tasks[0].status == TaskStatus::COMPLETED,
+                      "Burst stage task ends COMPLETED");
+            }
+        }
+
+        fs::remove_all(tempDir, ec);
+    }
 }
 
 int main()
@@ -361,6 +504,7 @@ int main()
     RunRansacAndBundleAdjustmentChecks();
     RunCpuComputeBackendChecks();
     RunCrossTierSimdKernelChecks();
+    RunBurstPipelineFoundationChecks();
 
     if (g_failures == 0)
     {

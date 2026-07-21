@@ -17,8 +17,34 @@ namespace WindowsApp::Core
             case PipelineStage::STAGE1_ALIGN:    return L"Align";
             case PipelineStage::STAGE2_OPTIMIZE: return L"Optimize";
             case PipelineStage::STAGE3_RENDER:   return L"Render";
+            case PipelineStage::BURST_ALIGN:     return L"BurstAlign";
+            case PipelineStage::BURST_MERGE:     return L"BurstMerge";
+            case PipelineStage::BURST_FINISH:    return L"BurstFinish";
             default:                             return L"?";
             }
+        }
+
+        // Which PipelineStage sequence Run() drives - selected by
+        // ProjectType, not hardcoded, so the same TaskScheduler/resume/
+        // cancel machinery serves both pipeline families (see
+        // docs/COMPUTATIONAL_PHOTOGRAPHY.md SS3, SS8 Phase 0). A project
+        // loaded before ProjectType existed reports PANORAMA (ProjectManager's
+        // default), so this is exactly today's sequence for every existing
+        // .vfp file - no behavior change for panorama projects.
+        const std::vector<PipelineStage>& StageSequenceFor(ProjectType type)
+        {
+            static const std::vector<PipelineStage> kPanoramaStages = {
+                PipelineStage::STAGE0_INGEST,
+                PipelineStage::STAGE1_ALIGN,
+                PipelineStage::STAGE2_OPTIMIZE,
+                PipelineStage::STAGE3_RENDER,
+            };
+            static const std::vector<PipelineStage> kBurstStages = {
+                PipelineStage::BURST_ALIGN,
+                PipelineStage::BURST_MERGE,
+                PipelineStage::BURST_FINISH,
+            };
+            return type == ProjectType::BURST ? kBurstStages : kPanoramaStages;
         }
 
         // unitKind/unitKey are ASCII ids (e.g. "pair", "img_2:img_9") -
@@ -45,13 +71,8 @@ namespace WindowsApp::Core
 
     bool PipelineDriver::Run(ProjectManager& projectManager, CancellationToken token)
     {
-        static constexpr PipelineStage kStageOrder[] = {
-            PipelineStage::STAGE0_INGEST,
-            PipelineStage::STAGE1_ALIGN,
-            PipelineStage::STAGE2_OPTIMIZE,
-            PipelineStage::STAGE3_RENDER,
-        };
-        static constexpr size_t kStageCount = std::size(kStageOrder);
+        const std::vector<PipelineStage>& kStageOrder = StageSequenceFor(projectManager.GetProjectType());
+        const size_t kStageCount = kStageOrder.size();
 
         TaskScheduler scheduler(projectManager, m_maxInFlight);
         for (const auto& [stage, executor] : m_executors)
@@ -62,6 +83,9 @@ namespace WindowsApp::Core
             PipelineStage stage = kStageOrder[i];
             m_currentStage.store(stage);
 
+            // Only meaningful for the panorama sequence - STAGE3_RENDER
+            // never appears in the burst sequence, so this never fires
+            // there.
             if (stage == PipelineStage::STAGE3_RENDER)
             {
                 // Render's chunk_contributors depend on Optimize's final
@@ -84,7 +108,7 @@ namespace WindowsApp::Core
             if (!alreadyComplete)
             {
                 bool ok = scheduler.RunStage(stage, token,
-                    [this, i, stage](const Task& task, float stageProgress)
+                    [this, i, stage, kStageCount](const Task& task, float stageProgress)
                     {
                         // Executors only ever return a plain bool (see
                         // ITaskExecutor.h) - there's no error string to
