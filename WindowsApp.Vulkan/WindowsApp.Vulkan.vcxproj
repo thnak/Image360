@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{f1b1d440-9228-4444-d4d4-9a9eb2d12b14}</ProjectGuid>
+    <ProjectName>WindowsApp.Vulkan</ProjectName>
+    <RootNamespace>WindowsApp::Compute</RootNamespace>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <MinimumVisualStudioVersion>16.0</MinimumVisualStudioVersion>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.17763.0</WindowsTargetPlatformMinVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' &gt;= '18.0'">v145</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' &lt; '18.0'">v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <LanguageStandard Condition="'$(VisualStudioVersion)' &gt;= '18.0'">stdcpp20</LanguageStandard>
+      <LanguageStandard Condition="'$(VisualStudioVersion)' &lt; '18.0'">stdcpp17</LanguageStandard>
+      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+      <PreprocessorDefinitions>WIN32;_LIB;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- VulkanPipeline.cpp includes its own header and Core's CPU-kernel
+           headers as "HeaderFiles/X.h" (matching the CMake build's own
+           include-dir layout), so both this project's root AND Core's
+           root (not their HeaderFiles subfolders) need to be on the path
+           - VulkanPipeline.h's own bare "IComputeBackend.h"/"ComputeTypes.h"
+           includes need Compute's HeaderFiles subfolder directly, though.
+           $(VULKAN_SDK) is set by the Vulkan SDK installer (see
+           C:\VulkanSDK\<version>); $(IntDir) is where the shader CustomBuild
+           steps below write the embedded SPIR-V headers this TU includes. -->
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\WindowsApp.Core\;$(ProjectDir)..\WindowsApp.Compute\HeaderFiles;$(VULKAN_SDK)\Include;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="HeaderFiles\VulkanPipeline.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="SourceFiles\VulkanPipeline.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Each shader compiles .comp -> SPIR-V via glslc, then embeds the
+         .spv as a C++ array header via the same cmake/EmbedShader.cmake
+         script the CMake build uses (cmake -P runs it standalone, no
+         CMake project/configure step needed) - reusing this avoids a
+         second, MSBuild-only reimplementation of the byte-order-reversal
+         logic. Both glslc and cmake are expected on PATH (Vulkan SDK's
+         Bin dir and the CMake install dir). Outputs land in $(IntDir),
+         which VulkanPipeline.cpp's #include "*.spv.h" resolves via the
+         AdditionalIncludeDirectories entry above. -->
+    <CustomBuild Include="shaders\apply_gain.comp">
+      <Message>Compiling and embedding apply_gain.comp</Message>
+      <Command>glslc --target-env=vulkan1.2 -O "%(FullPath)" -o "$(IntDir)apply_gain.spv"
+cmake -DSPV_FILE="$(IntDir)apply_gain.spv" -DHEADER_FILE="$(IntDir)apply_gain.spv.h" -DARRAY_NAME=apply_gain_spv -P "$(SolutionDir)cmake\EmbedShader.cmake"</Command>
+      <Outputs>$(IntDir)apply_gain.spv.h</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="shaders\warp_perspective.comp">
+      <Message>Compiling and embedding warp_perspective.comp</Message>
+      <Command>glslc --target-env=vulkan1.2 -O "%(FullPath)" -o "$(IntDir)warp_perspective.spv"
+cmake -DSPV_FILE="$(IntDir)warp_perspective.spv" -DHEADER_FILE="$(IntDir)warp_perspective.spv.h" -DARRAY_NAME=warp_perspective_spv -P "$(SolutionDir)cmake\EmbedShader.cmake"</Command>
+      <Outputs>$(IntDir)warp_perspective.spv.h</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="shaders\median_stack.comp">
+      <Message>Compiling and embedding median_stack.comp</Message>
+      <Command>glslc --target-env=vulkan1.2 -O "%(FullPath)" -o "$(IntDir)median_stack.spv"
+cmake -DSPV_FILE="$(IntDir)median_stack.spv" -DHEADER_FILE="$(IntDir)median_stack.spv.h" -DARRAY_NAME=median_stack_spv -P "$(SolutionDir)cmake\EmbedShader.cmake"</Command>
+      <Outputs>$(IntDir)median_stack.spv.h</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="shaders\demosaic_bayer.comp">
+      <Message>Compiling and embedding demosaic_bayer.comp</Message>
+      <Command>glslc --target-env=vulkan1.2 -O "%(FullPath)" -o "$(IntDir)demosaic_bayer.spv"
+cmake -DSPV_FILE="$(IntDir)demosaic_bayer.spv" -DHEADER_FILE="$(IntDir)demosaic_bayer.spv.h" -DARRAY_NAME=demosaic_bayer_spv -P "$(SolutionDir)cmake\EmbedShader.cmake"</Command>
+      <Outputs>$(IntDir)demosaic_bayer.spv.h</Outputs>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- No ProjectReference to WindowsApp.Core.vcxproj: only its
+         header-only RgbToGray/FastFeatureDetector/BriefDescriptorExtractor/
+         FeatureMatcher/GainColorOps declarations are needed (the 4
+         CPU-delegated IComputeBackend methods call straight into Core's
+         .lib, which the final exe already links) - matches how
+         WindowsApp.Compute avoids a hard reference to Core too. -->
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

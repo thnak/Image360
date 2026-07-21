@@ -63,19 +63,21 @@ namespace WindowsApp::Core
         {
             switch (cfaType)
             {
-            case CfaType::BAYER:   return "BAYER";
-            case CfaType::X_TRANS: return "X_TRANS";
-            case CfaType::FOVEON:  return "FOVEON";
-            case CfaType::UNKNOWN: return "UNKNOWN";
+            case CfaType::BAYER:        return "BAYER";
+            case CfaType::X_TRANS:      return "X_TRANS";
+            case CfaType::FOVEON:       return "FOVEON";
+            case CfaType::STANDARD_RGB: return "STANDARD_RGB";
+            case CfaType::UNKNOWN:      return "UNKNOWN";
             }
             return "UNKNOWN";
         }
 
         CfaType ParseCfaType(const std::string& s)
         {
-            if (s == "BAYER")   return CfaType::BAYER;
-            if (s == "X_TRANS") return CfaType::X_TRANS;
-            if (s == "FOVEON")  return CfaType::FOVEON;
+            if (s == "BAYER")        return CfaType::BAYER;
+            if (s == "X_TRANS")      return CfaType::X_TRANS;
+            if (s == "FOVEON")       return CfaType::FOVEON;
+            if (s == "STANDARD_RGB") return CfaType::STANDARD_RGB;
             return CfaType::UNKNOWN;
         }
     }

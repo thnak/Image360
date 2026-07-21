@@ -19,11 +19,18 @@ namespace WindowsApp::Core
     // Routes RawIngest to the GPU demosaic path (BAYER) or LibRaw's own
     // CPU dcraw_process() (X_TRANS, FOVEON - a deliberate, documented
     // exception per docs/ARCHITECTURE.md SS4.1, not a gap to close).
+    // STANDARD_RGB is not a CFA at all - it routes RawIngest around
+    // ImageLoader/LibRaw entirely to JpegCodec (.jpg/.jpeg) or vendored
+    // stb_image (.png/.bmp/.gif/.tga/.tif/.tiff), since any standard
+    // consumer image format (what most phone cameras produce) is already
+    // demosaiced RGB with no sensor mosaic to reconstruct. See
+    // ImageLoader::IsJpegFile / IsStandardImageFile.
     enum class CfaType
     {
         BAYER,
         X_TRANS,
         FOVEON,
+        STANDARD_RGB,
         UNKNOWN
     };
 

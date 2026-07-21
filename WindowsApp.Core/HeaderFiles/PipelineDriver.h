@@ -15,13 +15,24 @@ namespace WindowsApp::Core
     public:
         using ProgressCallback = std::function<void(PipelineStage stage, float overallProgress)>;
         using LogCallback = std::function<void(const std::wstring&)>;
+        // Fires once per task as it settles (see TaskScheduler::RunStage's
+        // settleFront), after task.status/outputBlobId are already final -
+        // a COMPLETED STAGE3_RENDER task's outputBlobId is ready to read
+        // and blit immediately, which is what lets a caller show each
+        // rendered chunk as it lands instead of only the final assembled
+        // result. Runs on whatever thread called Run() (see StitchStartButton_Click),
+        // never the UI thread directly - callers touching UI state must
+        // dispatch back themselves, same as ProgressCallback/LogCallback.
+        using TaskCallback = std::function<void(PipelineStage stage, const Task& task)>;
 
         // maxInFlight default (2) matches TaskScheduler's own GPU-oriented
         // default - callers on a CPU backend should pass a core-count-
         // derived value instead (CPU kernels are single-threaded
         // internally, so all parallelism comes from this in-flight
-        // window).
-        void Initialize(ProgressCallback onProgress, LogCallback onLog, size_t maxInFlight = 2);
+        // window). onTaskCompleted defaults to nullptr since most callers
+        // (tests, etc.) only care about stage-level progress.
+        void Initialize(ProgressCallback onProgress, LogCallback onLog, size_t maxInFlight = 2,
+                         TaskCallback onTaskCompleted = nullptr);
         void RegisterExecutor(PipelineStage stage, std::shared_ptr<ITaskExecutor> executor);
 
         // Drives STAGE0_INGEST -> STAGE1_ALIGN -> STAGE2_OPTIMIZE ->
@@ -41,6 +52,7 @@ namespace WindowsApp::Core
         std::unordered_map<PipelineStage, std::shared_ptr<ITaskExecutor>> m_executors;
         ProgressCallback m_onProgress;
         LogCallback m_onLog;
+        TaskCallback m_onTaskCompleted;
         size_t m_maxInFlight = 2;
         std::atomic<PipelineStage> m_currentStage{ PipelineStage::IDLE };
         std::atomic<float> m_overallProgress{ 0.0f };

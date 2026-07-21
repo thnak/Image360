@@ -214,28 +214,16 @@ namespace WindowsApp::Core
         }
         if (!refImage || !targetImage) return false;
 
-        ImageLoader refLoader;
-        ImageLoader targetLoader;
-        if (!refLoader.Open(refImage->file_path) || !targetLoader.Open(targetImage->file_path)) return false;
-
-        std::vector<unsigned char> refJpeg;
-        std::vector<unsigned char> targetJpeg;
-        if (!refLoader.GetEmbeddedPreviewJpeg(refJpeg) || !targetLoader.GetEmbeddedPreviewJpeg(targetJpeg)) return false;
-
-        unsigned char* refRgb = nullptr;
-        int refW = 0;
-        int refH = 0;
-        if (m_nvJpegCodec->Decode(refJpeg.data(), refJpeg.size(), &refRgb, &refW, &refH) != Compute::ComputeResult::SUCCESS)
+        std::vector<unsigned char> refRgbBuf, targetRgbBuf;
+        int refW = 0, refH = 0, targetW = 0, targetH = 0;
+        std::string decodeError;
+        if (!DecodePreviewRgb8(refImage->file_path, refImage->cfaType, *m_nvJpegCodec, refRgbBuf, refW, refH, decodeError))
+            return false;
+        if (!DecodePreviewRgb8(targetImage->file_path, targetImage->cfaType, *m_nvJpegCodec, targetRgbBuf, targetW, targetH, decodeError))
             return false;
 
-        unsigned char* targetRgb = nullptr;
-        int targetW = 0;
-        int targetH = 0;
-        if (m_nvJpegCodec->Decode(targetJpeg.data(), targetJpeg.size(), &targetRgb, &targetW, &targetH) != Compute::ComputeResult::SUCCESS)
-        {
-            m_nvJpegCodec->FreeDecoded(refRgb);
-            return false;
-        }
+        const unsigned char* refRgb = refRgbBuf.data();
+        const unsigned char* targetRgb = targetRgbBuf.data();
 
         double refSum = 0.0;
         double targetSum = 0.0;
@@ -262,9 +250,6 @@ namespace WindowsApp::Core
             targetSum += targetLuma;
             ++sampleCount;
         }
-
-        m_nvJpegCodec->FreeDecoded(refRgb);
-        m_nvJpegCodec->FreeDecoded(targetRgb);
 
         if (sampleCount == 0 || targetSum <= 0.0)
         {

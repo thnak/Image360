@@ -106,6 +106,7 @@
     <ClInclude Include="HeaderFiles\JpegCodec.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
+    <ClInclude Include="stb\stb_image.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">
@@ -225,6 +226,11 @@
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
     </ClCompile>
     <ClCompile Include="sqlite3\sqlite3.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <AdditionalOptions>/w %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="stb\stb_image_impl.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
       <AdditionalOptions>/w %(AdditionalOptions)</AdditionalOptions>

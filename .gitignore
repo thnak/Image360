@@ -109,3 +109,4 @@ LibRaw-*/
 .venv/
 __pycache__/
 *.pyc
+.whmcp-tmp/

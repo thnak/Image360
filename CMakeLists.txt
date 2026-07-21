@@ -13,6 +13,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
+# Off by default: needs the real-photo fixtures and is meant to run on
+# the actual self-hosted Windows CI runner (which sets this ON
+# explicitly), not as a routine local/dev-loop build - see
+# tests/pipeline_e2e_real_photos/main.cpp.
+option(IMAGE360_ENABLE_REAL_PHOTO_TESTS "Build/register the real-photo pipeline e2e test (CI-only)" OFF)
+
 include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
@@ -66,4 +72,8 @@ add_subdirectory(tests/pipeline_e2e)
 if(IMAGE360_HAVE_VULKAN)
     add_subdirectory(tests/vulkan_smoke)
     add_subdirectory(tests/pipeline_e2e_vulkan)
+endif()
+
+if(IMAGE360_ENABLE_REAL_PHOTO_TESTS)
+    add_subdirectory(tests/pipeline_e2e_real_photos)
 endif()

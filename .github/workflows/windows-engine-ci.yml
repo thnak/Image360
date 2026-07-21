@@ -54,7 +54,7 @@ jobs:
 
       - name: Configure (CUDA auto-skipped without nvcc)
         shell: cmd
-        run: cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Debug -DIMAGE360_ENABLE_REAL_PHOTO_TESTS=ON
 
       - name: Build
         shell: cmd

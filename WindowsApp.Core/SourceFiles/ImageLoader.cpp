@@ -1,11 +1,170 @@
 #include "pch.h"
 #include "HeaderFiles/ImageLoader.h"
 #include "HeaderFiles/TextEncoding.h"
+#include "HeaderFiles/PlatformFile.h"
 #include "libraw/libraw.h"
+#include "stb/stb_image.h"
 #include <algorithm>
 
 namespace WindowsApp::Core
 {
+    namespace
+    {
+        std::wstring FileExtensionLower(const std::wstring& path)
+        {
+            size_t dot = path.find_last_of(L'.');
+            if (dot == std::wstring::npos) return {};
+
+            std::wstring ext = path.substr(dot + 1);
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+            return ext;
+        }
+
+        // Shared by GetStandardImageDimensions/DecodeStandardImage - both
+        // stb_image entry points work from an in-memory buffer, not a
+        // path. PlatformFile (not std::ifstream) because a std::wstring
+        // path constructor is an MSVC-only ifstream extension - libstdc++
+        // (the Linux/CMake build) has no such overload.
+        bool ReadFileBytes(const std::wstring& path, std::vector<unsigned char>& outBytes)
+        {
+            PlatformFile file;
+            if (!file.Open(path, FileOpenMode::ReadOnly)) return false;
+
+            outBytes.resize(static_cast<size_t>(file.Size()));
+            if (outBytes.empty()) return true;
+            return file.Read(outBytes.data(), outBytes.size());
+        }
+    }
+
+    bool IsJpegFile(const std::wstring& path)
+    {
+        std::wstring ext = FileExtensionLower(path);
+        return ext == L"jpg" || ext == L"jpeg";
+    }
+
+    bool IsStandardImageFile(const std::wstring& path)
+    {
+        std::wstring ext = FileExtensionLower(path);
+        return ext == L"png" || ext == L"bmp" || ext == L"gif" ||
+               ext == L"tga" || ext == L"tif" || ext == L"tiff";
+    }
+
+    bool GetStandardImageDimensions(const std::wstring& path, int& outWidth, int& outHeight)
+    {
+        std::vector<unsigned char> bytes;
+        if (!ReadFileBytes(path, bytes)) return false;
+
+        int channels = 0;
+        return stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()),
+                                      &outWidth, &outHeight, &channels) != 0;
+    }
+
+    bool DecodeStandardImageRgb8(const std::wstring& path, std::vector<unsigned char>& outRgb,
+                                  int& outWidth, int& outHeight)
+    {
+        std::vector<unsigned char> bytes;
+        if (!ReadFileBytes(path, bytes)) return false;
+
+        int channelsInFile = 0;
+        // desired_channels=3 forces RGB8 output regardless of the
+        // source's actual channel count (grayscale PNGs, RGBA PNGs with
+        // an alpha channel this pipeline has no use for, etc).
+        stbi_uc* rgb8 = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
+                                               &outWidth, &outHeight, &channelsInFile, 3);
+        if (!rgb8) return false;
+
+        outRgb.assign(rgb8, rgb8 + static_cast<size_t>(outWidth) * static_cast<size_t>(outHeight) * 3);
+        stbi_image_free(rgb8);
+        return true;
+    }
+
+    bool DecodeStandardImage(const std::wstring& path, PixelBuffer& output)
+    {
+        std::vector<unsigned char> rgb8;
+        int width = 0, height = 0;
+        if (!DecodeStandardImageRgb8(path, rgb8, width, height)) return false;
+
+        // Widen 8-bit -> 16-bit, matching RawIngestExecutor::ExecuteJpegIngest's
+        // *257 (exact linear scaling: 255*257 == 65535) - every later
+        // pipeline stage expects RGB48 regardless of the input format.
+        output.width = width;
+        output.height = height;
+        output.data.resize(rgb8.size());
+        for (size_t i = 0; i < output.data.size(); ++i)
+        {
+            output.data[i] = static_cast<unsigned short>(rgb8[i]) * 257;
+        }
+        return true;
+    }
+
+    bool DecodePreviewRgb8(const std::wstring& filePath, CfaType cfaType, Compute::IImageCodec& jpegCodec,
+                           std::vector<unsigned char>& outRgb, int& outWidth, int& outHeight,
+                           std::string& outError)
+    {
+        if (cfaType == CfaType::STANDARD_RGB)
+        {
+            if (IsJpegFile(filePath))
+            {
+                std::vector<unsigned char> jpegBytes;
+                if (!ReadFileBytes(filePath, jpegBytes))
+                {
+                    outError = "Failed to read the source JPEG file.";
+                    return false;
+                }
+
+                unsigned char* decoded = nullptr;
+                Compute::ComputeResult result = jpegCodec.Decode(
+                    jpegBytes.data(), jpegBytes.size(), &decoded, &outWidth, &outHeight);
+                if (result != Compute::ComputeResult::SUCCESS || !decoded)
+                {
+                    outError = "JpegCodec::Decode failed: " + std::string(jpegCodec.GetLastError());
+                    return false;
+                }
+
+                outRgb.assign(decoded, decoded + static_cast<size_t>(outWidth) * static_cast<size_t>(outHeight) * 3);
+                jpegCodec.FreeDecoded(decoded);
+                return true;
+            }
+
+            if (!DecodeStandardImageRgb8(filePath, outRgb, outWidth, outHeight))
+            {
+                outError = "DecodeStandardImageRgb8 failed for the source image.";
+                return false;
+            }
+            return true;
+        }
+
+        // RAW path: pull the small embedded preview instead of paying for
+        // a full demosaic just to get a feature/gain-compensation preview.
+        ImageLoader loader;
+        if (!loader.Open(filePath))
+        {
+            outError = "ImageLoader::Open failed for the source file.";
+            return false;
+        }
+
+        std::vector<unsigned char> jpegBytes;
+        if (!loader.GetEmbeddedPreviewJpeg(jpegBytes))
+        {
+            std::wstring loaderError = loader.GetLastError();
+            outError = "GetEmbeddedPreviewJpeg failed: " + std::string(loaderError.begin(), loaderError.end());
+            return false;
+        }
+
+        unsigned char* decoded = nullptr;
+        Compute::ComputeResult result = jpegCodec.Decode(
+            jpegBytes.data(), jpegBytes.size(), &decoded, &outWidth, &outHeight);
+        if (result != Compute::ComputeResult::SUCCESS || !decoded)
+        {
+            outError = "JpegCodec::Decode failed: " + std::string(jpegCodec.GetLastError());
+            return false;
+        }
+
+        outRgb.assign(decoded, decoded + static_cast<size_t>(outWidth) * static_cast<size_t>(outHeight) * 3);
+        jpegCodec.FreeDecoded(decoded);
+        return true;
+    }
+
     struct ImageLoader::Impl
     {
         LibRaw processor;

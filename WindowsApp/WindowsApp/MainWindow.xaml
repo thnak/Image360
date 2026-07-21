@@ -18,35 +18,14 @@
         <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="0,0,0,1"
                 Padding="24,18">
-            <Grid ColumnSpacing="16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <StackPanel Spacing="2">
-                    <TextBlock Text="Photo Lab"
-                               Style="{StaticResource TitleTextBlockStyle}" />
-                    <TextBlock x:Name="EditorStatusText"
-                               Text="Select a picture to begin editing. GPU preview path is ready for a Direct2D backend."
-                               Style="{StaticResource BodyTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               TextWrapping="WrapWholeWords" />
-                </StackPanel>
-
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            Spacing="8"
-                            VerticalAlignment="Center">
-                    <Button x:Name="OpenImageButton"
-                            Content="Open picture"
-                            Click="OpenImageButton_Click"
-                            Style="{StaticResource AccentButtonStyle}" />
-                    <Button x:Name="ResetEditsButton"
-                            Content="Reset edits"
-                            Click="ResetEditsButton_Click" />
-                </StackPanel>
-            </Grid>
+            <StackPanel Spacing="2">
+                <TextBlock Text="Panorama Stitcher"
+                           Style="{StaticResource TitleTextBlockStyle}" />
+                <TextBlock Text="Pick a set of overlapping RAW photos and stitch them into one panorama."
+                           Style="{StaticResource BodyTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="WrapWholeWords" />
+            </StackPanel>
         </Border>
 
         <Grid Grid.Row="1"
@@ -57,226 +36,110 @@
                 <ColumnDefinition Width="320" />
             </Grid.ColumnDefinitions>
 
-            <Grid RowSpacing="12">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="20">
+                <Grid>
+                    <Grid.Background>
+                        <AcrylicBrush TintOpacity="0.08" />
+                    </Grid.Background>
 
-                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                        BorderThickness="1"
-                        CornerRadius="8"
-                        Padding="20">
-                    <Grid>
-                        <Grid.Background>
-                            <AcrylicBrush TintOpacity="0.08" />
-                        </Grid.Background>
+                    <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch">
+                        <Grid>
+                            <Rectangle Fill="{ThemeResource LayerFillColorDefaultBrush}" />
+                            <!-- Shows the panorama canvas as it's built: each
+                                 render chunk is blitted into this bitmap in
+                                 place as its task completes (see
+                                 MainWindow::OnRenderTaskCompleted), so the
+                                 picture fills in progressively instead of
+                                 only appearing once the whole stitch is
+                                 done. -->
+                            <Image x:Name="RenderPreviewImage"
+                                   Stretch="Uniform"
+                                   HorizontalAlignment="Stretch"
+                                   VerticalAlignment="Stretch" />
 
-                        <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1"
-                                CornerRadius="6"
-                                HorizontalAlignment="Stretch"
-                                VerticalAlignment="Stretch">
-                            <Grid>
-                                <Rectangle Fill="{ThemeResource LayerFillColorDefaultBrush}" />
-                                <Image x:Name="EditedImage"
-                                       Stretch="Uniform"
-                                       HorizontalAlignment="Stretch"
-                                       VerticalAlignment="Stretch" />
-
-                                <StackPanel x:Name="EmptyStatePanel"
-                                            HorizontalAlignment="Center"
-                                            VerticalAlignment="Center"
-                                            Spacing="8">
-                                    <FontIcon Glyph="&#xE91B;"
-                                              FontSize="44"
-                                              Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                                    <TextBlock Text="No picture selected"
-                                               Style="{StaticResource SubtitleTextBlockStyle}"
-                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                               HorizontalAlignment="Center" />
-                                    <TextBlock Text="Use Open picture to load JPG, PNG, BMP, GIF, or TIFF."
-                                               Style="{StaticResource CaptionTextBlockStyle}"
-                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                               TextWrapping="WrapWholeWords"
-                                               HorizontalAlignment="Center" />
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </Grid>
-                </Border>
-
-                <Grid Grid.Row="1"
-                      ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-
-                    <InfoBar Title="GPU preview"
-                             Message="UI is prepared for GPU-backed rendering; current preview uses WinUI image decoding."
-                             Severity="Informational"
-                             IsOpen="True" />
-                    <InfoBar Grid.Column="1"
-                             Title="Non-destructive"
-                             Message="Sliders update edit state without changing the source file."
-                             Severity="Success"
-                             IsOpen="True" />
-                    <InfoBar Grid.Column="2"
-                             Title="Next backend"
-                             Message="Direct2D effects can plug into the named preview surface."
-                             Severity="Warning"
-                             IsOpen="True" />
+                            <StackPanel x:Name="EmptyStatePanel"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        Spacing="8">
+                                <FontIcon Glyph="&#xE91B;"
+                                          FontSize="44"
+                                          Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                <TextBlock Text="No stitch yet"
+                                           Style="{StaticResource SubtitleTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="Use Start Stitch to pick RAW photos (RAF, CR2, NEF, ARW, DNG)."
+                                           Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                           TextWrapping="WrapWholeWords"
+                                           HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
                 </Grid>
-            </Grid>
+            </Border>
 
-            <ScrollViewer Grid.Column="1">
+            <Border Grid.Column="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="18"
+                    VerticalAlignment="Top">
                 <StackPanel Spacing="12">
-                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Padding="18">
-                        <StackPanel Spacing="16">
-                            <TextBlock Text="Adjustments"
-                                       Style="{StaticResource SubtitleTextBlockStyle}" />
-
-                            <Slider x:Name="BrightnessSlider"
-                                    Header="Brightness"
-                                    Minimum="-100"
-                                    Maximum="100"
-                                    Value="0"
-                                    ValueChanged="AdjustmentSlider_ValueChanged" />
-                            <Slider x:Name="ContrastSlider"
-                                    Header="Contrast"
-                                    Minimum="-100"
-                                    Maximum="100"
-                                    Value="0"
-                                    ValueChanged="AdjustmentSlider_ValueChanged" />
-                            <Slider x:Name="SaturationSlider"
-                                    Header="Saturation"
-                                    Minimum="-100"
-                                    Maximum="100"
-                                    Value="0"
-                                    ValueChanged="AdjustmentSlider_ValueChanged" />
-                            <Slider x:Name="SharpnessSlider"
-                                    Header="Sharpness"
-                                    Minimum="0"
-                                    Maximum="100"
-                                    Value="0"
-                                    ValueChanged="AdjustmentSlider_ValueChanged" />
-
-                            <ComboBox x:Name="EffectModeComboBox"
-                                      Header="Effect"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="Original" />
-                                <ComboBoxItem Content="Black and white" />
-                                <ComboBoxItem Content="Cinematic warm" />
-                                <ComboBoxItem Content="Cool shadows" />
-                            </ComboBox>
-
-                            <ToggleSwitch x:Name="GpuPreviewToggle"
-                                          Header="GPU accelerated preview"
-                                          IsOn="True" />
-                        </StackPanel>
-                    </Border>
-
-                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Padding="18">
-                        <StackPanel Spacing="12">
-                            <TextBlock Text="Tools"
-                                       Style="{StaticResource SubtitleTextBlockStyle}" />
-                            <Grid ColumnSpacing="8" RowSpacing="8">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-
-                                <Button Content="Crop"
-                                        HorizontalAlignment="Stretch" />
-                                <Button Grid.Column="1"
-                                        Content="Rotate"
-                                        HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="1"
-                                        Content="Mask"
-                                        HorizontalAlignment="Stretch" />
-                                <Button Grid.Row="1"
-                                        Grid.Column="1"
-                                        Content="Export"
-                                        HorizontalAlignment="Stretch" />
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Padding="18">
-                        <StackPanel Spacing="12">
-                            <TextBlock Text="Layers"
-                                       Style="{StaticResource SubtitleTextBlockStyle}" />
-                            <ListView SelectionMode="Single"
-                                      SelectedIndex="0">
-                                <ListViewItem Content="Background image" />
-                                <ListViewItem Content="Adjustment layer" />
-                                <ListViewItem Content="Preview mask" />
-                            </ListView>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Padding="18">
-                        <StackPanel Spacing="12">
-                            <TextBlock Text="Panorama Stitch"
-                                       Style="{StaticResource SubtitleTextBlockStyle}" />
-                            <TextBlock x:Name="StitchStatusText"
-                                       Text="No stitch running."
-                                       Style="{StaticResource BodyTextBlockStyle}"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="WrapWholeWords" />
-                            <ProgressBar x:Name="StitchProgressBar"
-                                         Minimum="0"
-                                         Maximum="100"
-                                         Value="0" />
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Button x:Name="StitchStartButton"
-                                        Content="Start Stitch"
-                                        Click="StitchStartButton_Click"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        HorizontalAlignment="Stretch" />
-                                <Button x:Name="StitchCancelButton"
-                                        Grid.Column="1"
-                                        Content="Cancel"
-                                        IsEnabled="False"
-                                        Click="StitchCancelButton_Click"
-                                        HorizontalAlignment="Stretch" />
-                            </Grid>
-                            <Button x:Name="StitchExportButton"
-                                    Content="Export Preview JPEG"
-                                    IsEnabled="False"
-                                    Click="StitchExportButton_Click"
-                                    HorizontalAlignment="Stretch" />
-                        </StackPanel>
-                    </Border>
+                    <TextBlock Text="Panorama Stitch"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <ComboBox x:Name="ComputeBackendComboBox"
+                              Header="Compute backend"
+                              SelectedIndex="0"
+                              HorizontalAlignment="Stretch"
+                              SelectionChanged="ComputeBackendComboBox_SelectionChanged">
+                        <ComboBoxItem Content="Auto (recommended)" />
+                        <ComboBoxItem Content="CUDA (NVIDIA)" />
+                        <ComboBoxItem Content="Vulkan" />
+                        <ComboBoxItem Content="CPU" />
+                    </ComboBox>
+                    <TextBlock x:Name="StitchStatusText"
+                               Text="No stitch running."
+                               Style="{StaticResource BodyTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="WrapWholeWords" />
+                    <ProgressBar x:Name="StitchProgressBar"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="0" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="StitchStartButton"
+                                Content="Start Stitch"
+                                Click="StitchStartButton_Click"
+                                Style="{StaticResource AccentButtonStyle}"
+                                HorizontalAlignment="Stretch" />
+                        <Button x:Name="StitchCancelButton"
+                                Grid.Column="1"
+                                Content="Cancel"
+                                IsEnabled="False"
+                                Click="StitchCancelButton_Click"
+                                HorizontalAlignment="Stretch" />
+                    </Grid>
+                    <Button x:Name="StitchExportButton"
+                            Content="Export Preview JPEG"
+                            IsEnabled="False"
+                            Click="StitchExportButton_Click"
+                            HorizontalAlignment="Stretch" />
                 </StackPanel>
-            </ScrollViewer>
+            </Border>
         </Grid>
     </Grid>
 </Window>

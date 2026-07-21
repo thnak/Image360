@@ -53,14 +53,21 @@ namespace WindowsApp::Core
             int width = 0;
             int height = 0;
 
-            ImageLoader loader;
-            if (loader.Open(image.file_path))
+            if (image.cfaType == CfaType::STANDARD_RGB)
             {
-                ImageMetadata metadata;
-                if (loader.GetMetadata(metadata))
+                GetStandardImageDimensions(image.file_path, width, height);
+            }
+            else
+            {
+                ImageLoader loader;
+                if (loader.Open(image.file_path))
                 {
-                    width = metadata.width;
-                    height = metadata.height;
+                    ImageMetadata metadata;
+                    if (loader.GetMetadata(metadata))
+                    {
+                        width = metadata.width;
+                        height = metadata.height;
+                    }
                 }
             }
 

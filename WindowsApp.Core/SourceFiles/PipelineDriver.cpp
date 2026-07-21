@@ -29,11 +29,13 @@ namespace WindowsApp::Core
         }
     }
 
-    void PipelineDriver::Initialize(ProgressCallback onProgress, LogCallback onLog, size_t maxInFlight)
+    void PipelineDriver::Initialize(ProgressCallback onProgress, LogCallback onLog, size_t maxInFlight,
+                                     TaskCallback onTaskCompleted)
     {
         m_onProgress = std::move(onProgress);
         m_onLog = std::move(onLog);
         m_maxInFlight = maxInFlight;
+        m_onTaskCompleted = std::move(onTaskCompleted);
     }
 
     void PipelineDriver::RegisterExecutor(PipelineStage stage, std::shared_ptr<ITaskExecutor> executor)
@@ -102,6 +104,11 @@ namespace WindowsApp::Core
                                 L" unitKey=" + Widen(task.unitKey) +
                                 L" attempts=" + std::to_wstring(task.attemptCount) +
                                 (task.errorMessage.empty() ? L"" : (L" reason=" + Widen(task.errorMessage))));
+                        }
+
+                        if (m_onTaskCompleted && task.status == TaskStatus::COMPLETED)
+                        {
+                            m_onTaskCompleted(stage, task);
                         }
 
                         float overall = (static_cast<float>(i) + stageProgress) / static_cast<float>(kStageCount);

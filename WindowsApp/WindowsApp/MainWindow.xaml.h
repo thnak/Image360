@@ -15,21 +15,13 @@ namespace winrt::WindowsApp::implementation
         int32_t MyProperty();
         void MyProperty(int32_t value);
 
-        winrt::fire_and_forget OpenImageButton_Click(
-            winrt::Windows::Foundation::IInspectable const& sender,
-            winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
-
-        void ResetEditsButton_Click(
-            winrt::Windows::Foundation::IInspectable const& sender,
-            winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
-
-        void AdjustmentSlider_ValueChanged(
-            winrt::Windows::Foundation::IInspectable const& sender,
-            winrt::Microsoft::UI::Xaml::Controls::Primitives::RangeBaseValueChangedEventArgs const& args);
-
         winrt::fire_and_forget StitchStartButton_Click(
             winrt::Windows::Foundation::IInspectable const& sender,
             winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
+
+        void ComputeBackendComboBox_SelectionChanged(
+            winrt::Windows::Foundation::IInspectable const& sender,
+            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& args);
 
         void StitchCancelButton_Click(
             winrt::Windows::Foundation::IInspectable const& sender,
@@ -38,6 +30,17 @@ namespace winrt::WindowsApp::implementation
         winrt::fire_and_forget StitchExportButton_Click(
             winrt::Windows::Foundation::IInspectable const& sender,
             winrt::Microsoft::UI::Xaml::RoutedEventArgs const& args);
+
+        // Must run on the UI thread (touches m_renderCanvas/RenderPreviewImage) -
+        // the StitchStartButton_Click's per-task callback dispatches into
+        // this via DispatcherQueue::TryEnqueue, same as every other UI
+        // touch from that background thread. Blits `pixels` (RGB48) into
+        // m_renderCanvas at (xOffset, yOffset), converting to the
+        // WriteableBitmap's native BGRA8 format, and invalidates so the
+        // compositor picks up the change - this is what makes each render
+        // chunk appear as soon as its task completes instead of only the
+        // final assembled panorama.
+        void BlitRenderedChunk(const ::WindowsApp::Core::PixelBuffer& pixels, int xOffset, int yOffset);
 
     private:
         // Declared in this order - not the stop_source/jthread/Project/
@@ -51,12 +54,32 @@ namespace winrt::WindowsApp::implementation
         ::WindowsApp::Core::ProjectManager m_stitchProject;
         ::WindowsApp::Core::StorageEngine m_stitchStorage;
         ::WindowsApp::Core::PipelineDriver m_pipelineDriver;
+        // Sized to the project's full canvas (totalWidth x totalHeight) at
+        // Start Stitch time and set as RenderPreviewImage's Source; each
+        // completed Render chunk is blitted into its (x_offset, y_offset)
+        // sub-rectangle via BlitRenderedChunk as the stitch progresses.
+        // Only ever touched from the UI thread.
+        winrt::Microsoft::UI::Xaml::Media::Imaging::WriteableBitmap m_renderCanvas{ nullptr };
+        // 1.0 unless the project's full canvas exceeds a sane preview
+        // size (see StitchStartButton_Click) - real multi-photo panoramas
+        // can have a coarse pre-alignment canvas estimate of several
+        // thousand pixels per side per input image, and allocating a
+        // WriteableBitmap at that size verbatim is hundreds of MB to
+        // multiple GB (a real crash seen with 3000x4000 phone photos).
+        // BlitRenderedChunk downsamples each chunk's pixels by this factor
+        // instead of copying 1:1.
+        double m_renderPreviewScale = 1.0;
         // Concrete type is CudaPipeline or CpuComputeBackend, picked at
         // runtime by ComputeBackendFactory::SelectComputeBackend() - see
         // its call site for why (no GPU should abort the whole app).
         std::shared_ptr<::WindowsApp::Compute::IComputeBackend> m_cudaPipeline;
         std::shared_ptr<::WindowsApp::Compute::IImageCodec> m_nvJpegCodec;
         bool m_computeInitialized = false;
+        // Set from ComputeBackendComboBox; changing it invalidates
+        // m_computeInitialized so the next Start Stitch click re-runs
+        // SelectComputeBackend() with the new preference instead of
+        // reusing whatever backend the first run happened to pick.
+        ::WindowsApp::ComputeBackendKind m_computeBackendPreference = ::WindowsApp::ComputeBackendKind::Auto;
         size_t m_computeMaxInFlight = 2;
         // Last message PipelineDriver's onLog callback delivered - the
         // stitch-completion handler folds this into "Stitch failed." since

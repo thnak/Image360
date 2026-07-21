@@ -97,8 +97,16 @@
       <LanguageStandard Condition="'$(VisualStudioVersion)' &gt;= '18.0'">stdcpp20</LanguageStandard>
       <LanguageStandard Condition="'$(VisualStudioVersion)' &lt; '18.0'">stdcpp17</LanguageStandard>
       <AdditionalOptions>%(AdditionalOptions) /bigobj /FS</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(SolutionDir)WindowsApp.Core;$(SolutionDir)WindowsApp.Core\HeaderFiles;$(SolutionDir)WindowsApp.Compute;$(SolutionDir)WindowsApp.Compute\HeaderFiles;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)WindowsApp.Core;$(SolutionDir)WindowsApp.Core\HeaderFiles;$(SolutionDir)WindowsApp.Compute;$(SolutionDir)WindowsApp.Compute\HeaderFiles;$(SolutionDir)WindowsApp.Vulkan\HeaderFiles;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <Link>
+      <!-- $(VULKAN_SDK) is set by the Vulkan SDK installer - vulkan-1.dll
+           itself ships with any up-to-date GPU driver (unlike
+           WindowsApp.Compute's CUDA redistributable DLLs), so this is a
+           much softer runtime requirement than the CUDA tier. -->
+      <AdditionalLibraryDirectories>$(VULKAN_SDK)\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
     <ClCompile>
@@ -164,19 +172,35 @@
       is a static lib and no longer references WindowsApp.Compute at all
       (it only needs the header-only IComputeBackend/IImageCodec
       interfaces) - this project is now the one place that links
-      WindowsApp.Compute directly, since it's the composition root that
-      picks between CudaPipeline (GPU) and CpuComputeBackend (CPU
-      fallback) at runtime (see ComputeBackendFactory). WindowsApp.Compute
-      is a dynamic lib (CUDA DLL) - WindowsApp.Compute.dll needs to be
-      copied into the WindowsApp (Package).wapproj output, which is NOT
-      assumed to happen automatically for a .wapproj the way it would for
-      a plain .exe project. Verify this when running the packaged app.
+      WindowsApp.Compute/WindowsApp.Vulkan directly, since it's the
+      composition root that picks between CudaPipeline (GPU),
+      VulkanPipeline (GPU), and CpuComputeBackend (CPU fallback) at
+      runtime (see ComputeBackendFactory). WindowsApp.Compute is a dynamic
+      lib (CUDA DLL) - CONFIRMED (not just a theoretical risk) that
+      WindowsApp.Compute.dll and vcpkg-provided DLLs like turbojpeg.dll do
+      NOT reliably end up next to WindowsApp.exe across different build
+      invocations (MSBuild's incremental-clean bookkeeping can sweep them
+      away when the project is built from a different context, e.g. the
+      .wapproj built standalone vs. via the .slnx) - a manual copy step
+      was needed to get an unpackaged WindowsApp.exe to even load. Needs a
+      proper fix (an explicit post-build copy target) before relying on
+      an unpackaged deploy of this exe; the WindowsApp (Package).wapproj
+      packaging path hasn't been re-verified against this same failure
+      mode. WindowsApp.Vulkan is a static lib, so it doesn't have this
+      problem - its code links straight into WindowsApp.exe.
     -->
     <ProjectReference Include="..\..\WindowsApp.Core\WindowsApp.Core.vcxproj">
       <Project>{d6b1d440-6228-4444-a1a1-9a9eb2d12b11}</Project>
     </ProjectReference>
     <ProjectReference Include="..\..\WindowsApp.Compute\WindowsApp.Compute.vcxproj">
       <Project>{c7b1d440-7228-4444-b2b2-9a9eb2d12b12}</Project>
+    </ProjectReference>
+    <!-- WindowsApp.Vulkan is a static lib (unlike WindowsApp.Compute's
+         CUDA DLL) - its object code links directly into WindowsApp.exe,
+         so there's no equivalent "must copy the DLL into the packaged
+         output" concern for the Vulkan tier. -->
+    <ProjectReference Include="..\..\WindowsApp.Vulkan\WindowsApp.Vulkan.vcxproj">
+      <Project>{f1b1d440-9228-4444-d4d4-9a9eb2d12b14}</Project>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

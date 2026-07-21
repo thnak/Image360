@@ -158,7 +158,7 @@ namespace WindowsApp { namespace Testing
                 maxInFlight);
 
             driver.RegisterExecutor(PipelineStage::STAGE0_INGEST,
-                std::make_shared<RawIngestExecutor>(projectManager, storageEngine, computeBackend));
+                std::make_shared<RawIngestExecutor>(projectManager, storageEngine, computeBackend, jpegCodec));
             driver.RegisterExecutor(PipelineStage::STAGE1_ALIGN,
                 std::make_shared<AlignExecutor>(projectManager, storageEngine, computeBackend, jpegCodec));
             driver.RegisterExecutor(PipelineStage::STAGE2_OPTIMIZE,

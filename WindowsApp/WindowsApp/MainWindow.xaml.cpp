@@ -12,12 +12,12 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
-using namespace Microsoft::UI::Xaml::Controls::Primitives;
 using namespace Microsoft::UI::Xaml::Media::Imaging;
 using namespace Microsoft::Windows::Storage::Pickers;
 using namespace Windows::Storage;
@@ -106,69 +106,6 @@ namespace winrt::WindowsApp::implementation
         throw hresult_not_implemented();
     }
 
-    fire_and_forget MainWindow::OpenImageButton_Click(
-        Windows::Foundation::IInspectable const& /* sender */,
-        RoutedEventArgs const& /* args */)
-    {
-        auto lifetime{ get_strong() };
-
-        try
-        {
-            FileOpenPicker picker{ AppWindow().Id() };
-            picker.FileTypeFilter().Append(L".jpg");
-            picker.FileTypeFilter().Append(L".jpeg");
-            picker.FileTypeFilter().Append(L".png");
-            picker.FileTypeFilter().Append(L".bmp");
-            picker.FileTypeFilter().Append(L".gif");
-            picker.FileTypeFilter().Append(L".tif");
-            picker.FileTypeFilter().Append(L".tiff");
-
-            auto result{ co_await picker.PickSingleFileAsync() };
-            if (!result)
-            {
-                EditorStatusText().Text(L"Picture selection cancelled.");
-                co_return;
-            }
-
-            auto file{ co_await StorageFile::GetFileFromPathAsync(result.Path()) };
-            auto stream{ co_await file.OpenReadAsync() };
-
-            BitmapImage bitmap;
-            co_await bitmap.SetSourceAsync(stream);
-
-            EditedImage().Source(bitmap);
-            EmptyStatePanel().Visibility(Visibility::Collapsed);
-            EditorStatusText().Text(L"Picture loaded. Adjustments are staged for the GPU preview pipeline.");
-        }
-        catch (hresult_error const& error)
-        {
-            EditorStatusText().Text(winrt::hstring{ L"Could not open picture: " } + error.message());
-        }
-    }
-
-    void MainWindow::ResetEditsButton_Click(
-        Windows::Foundation::IInspectable const& /* sender */,
-        RoutedEventArgs const& /* args */)
-    {
-        BrightnessSlider().Value(0);
-        ContrastSlider().Value(0);
-        SaturationSlider().Value(0);
-        SharpnessSlider().Value(0);
-        EffectModeComboBox().SelectedIndex(0);
-        GpuPreviewToggle().IsOn(true);
-        EditorStatusText().Text(L"Edits reset to the original preview.");
-    }
-
-    void MainWindow::AdjustmentSlider_ValueChanged(
-        Windows::Foundation::IInspectable const& /* sender */,
-        RangeBaseValueChangedEventArgs const& /* args */)
-    {
-        if (auto statusText{ EditorStatusText() })
-        {
-            statusText.Text(L"Adjustment changed. GPU preview backend is the next step for rendered effects.");
-        }
-    }
-
     winrt::fire_and_forget MainWindow::StitchStartButton_Click(
         Windows::Foundation::IInspectable const& /* sender */,
         RoutedEventArgs const& /* args */)
@@ -188,6 +125,14 @@ namespace winrt::WindowsApp::implementation
         StitchProgressBar().Value(0);
         m_lastStitchLogMessage.clear();
 
+        // A re-run (Start Stitch clicked again after a previous run) must
+        // not keep showing the previous stitch's finished canvas while
+        // photos are (re-)picked - back to the empty state until the new
+        // project's canvas is created below.
+        EmptyStatePanel().Visibility(Visibility::Visible);
+        RenderPreviewImage().Source(nullptr);
+        m_renderCanvas = nullptr;
+
         // A previous run has already finished (Start is disabled while one
         // is active), but std::jthread stays joinable until explicitly
         // joined - clear it out before starting a fresh one.
@@ -205,7 +150,7 @@ namespace winrt::WindowsApp::implementation
         // CPU JPEG codec failing to initialize, extremely rare) would.
         if (!m_computeInitialized)
         {
-            auto selection = ::WindowsApp::SelectComputeBackend();
+            auto selection = ::WindowsApp::SelectComputeBackend(m_computeBackendPreference);
             m_cudaPipeline = selection.backend;
             m_nvJpegCodec = selection.codec;
             m_computeMaxInFlight = selection.recommendedMaxInFlight;
@@ -220,6 +165,17 @@ namespace winrt::WindowsApp::implementation
         picker.FileTypeFilter().Append(L".nef");
         picker.FileTypeFilter().Append(L".arw");
         picker.FileTypeFilter().Append(L".dng");
+        // Standard consumer image formats - what most phone cameras
+        // actually produce, routed around ImageLoader/LibRaw entirely
+        // (see RawIngestExecutor::Execute's STANDARD_RGB branch).
+        picker.FileTypeFilter().Append(L".jpg");
+        picker.FileTypeFilter().Append(L".jpeg");
+        picker.FileTypeFilter().Append(L".png");
+        picker.FileTypeFilter().Append(L".bmp");
+        picker.FileTypeFilter().Append(L".gif");
+        picker.FileTypeFilter().Append(L".tga");
+        picker.FileTypeFilter().Append(L".tif");
+        picker.FileTypeFilter().Append(L".tiff");
 
         auto pickedFiles{ co_await picker.PickMultipleFilesAsync() };
         if (!pickedFiles || pickedFiles.Size() == 0)
@@ -249,6 +205,22 @@ namespace winrt::WindowsApp::implementation
         for (auto const& file : pickedFiles)
         {
             std::wstring path(file.Path().c_str());
+
+            if (::WindowsApp::Core::IsJpegFile(path) || ::WindowsApp::Core::IsStandardImageFile(path))
+            {
+                // Header-only read (no full decode) just for width/height
+                // (the pre-alignment canvas estimate below) -
+                // RawIngestExecutor::Execute's STANDARD_RGB branch decodes
+                // the actual pixels again during Stage0, same
+                // throwaway-metadata-read pattern the RAW branch below
+                // already has with its own UnpackRaw/GetMetadata call.
+                int standardWidth = 0, standardHeight = 0;
+                if (!::WindowsApp::Core::GetStandardImageDimensions(path, standardWidth, standardHeight)) continue;
+                if (standardWidth <= 0 || standardHeight <= 0) continue;
+
+                pickedImages.push_back({ path, CfaType::STANDARD_RGB, standardWidth, standardHeight });
+                continue;
+            }
 
             ::WindowsApp::Core::ImageLoader loader;
             if (!loader.Open(path)) continue;
@@ -309,6 +281,47 @@ namespace winrt::WindowsApp::implementation
         DeleteFileW((projectPath + L"-shm").c_str());
         m_stitchProject.CreateProject(projectPath, totalWidth, totalHeight);
 
+        // Blank (fully transparent) canvas at the project's full extent -
+        // each Render chunk fills in its own sub-rectangle as its task
+        // completes (see the onTaskCompleted callback passed to
+        // m_pipelineDriver.Initialize below), so the still-transparent
+        // regions show the placeholder background through until their
+        // chunk lands instead of the whole picture popping in at once.
+        //
+        // totalWidth/totalHeight is a coarse pre-alignment OVER-estimate
+        // (maxWidth/maxHeight * image count, sized for the worst case
+        // before real geometry is known) - fine as inert project/chunk-
+        // grid bookkeeping, but allocating a WriteableBitmap at that size
+        // verbatim is a real crash for real photos (3 x 3000x4000 phone
+        // photos -> a 9000x12000 canvas, ~412MB, allocated synchronously
+        // on the UI thread with no room to fail gracefully). Cap the
+        // *preview* canvas to a sane display size and have
+        // BlitRenderedChunk downsample into it instead.
+        constexpr int kMaxPreviewDimension = 2048;
+        int longestSide = (std::max)(totalWidth, totalHeight);
+        m_renderPreviewScale = (longestSide > kMaxPreviewDimension)
+            ? static_cast<double>(kMaxPreviewDimension) / static_cast<double>(longestSide)
+            : 1.0;
+        int previewWidth = (std::max)(1, static_cast<int>(totalWidth * m_renderPreviewScale));
+        int previewHeight = (std::max)(1, static_cast<int>(totalHeight * m_renderPreviewScale));
+
+        try
+        {
+            m_renderCanvas = WriteableBitmap(previewWidth, previewHeight);
+            RenderPreviewImage().Source(m_renderCanvas);
+            EmptyStatePanel().Visibility(Visibility::Collapsed);
+        }
+        catch (hresult_error const& error)
+        {
+            // The live preview is a nice-to-have, not load-bearing - if
+            // the canvas still can't be allocated for some other reason,
+            // disable it (BlitRenderedChunk no-ops on a null
+            // m_renderCanvas) rather than taking the whole app down; the
+            // stitch itself doesn't depend on this.
+            m_renderCanvas = nullptr;
+            AppendToStitchLog(L"Render preview disabled: " + std::wstring(error.message().c_str()));
+        }
+
         {
             size_t lastSlash = projectPath.find_last_of(L'\\');
             size_t lastDot = projectPath.find_last_of(L'.');
@@ -333,7 +346,7 @@ namespace winrt::WindowsApp::implementation
         // right before the Render stage (issue #42).
 
         m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE0_INGEST,
-            std::make_shared<::WindowsApp::Core::RawIngestExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline));
+            std::make_shared<::WindowsApp::Core::RawIngestExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline, m_nvJpegCodec));
         m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE1_ALIGN,
             std::make_shared<::WindowsApp::Core::AlignExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline, m_nvJpegCodec));
         m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE2_OPTIMIZE,
@@ -382,7 +395,52 @@ namespace winrt::WindowsApp::implementation
                     }
                 });
             },
-            m_computeMaxInFlight);
+            m_computeMaxInFlight,
+            [weakThis, dispatcher](::WindowsApp::Core::PipelineStage stage, ::WindowsApp::Core::Task const& task)
+            {
+                // Runs on m_stitchThread (see PipelineDriver::TaskCallback's
+                // doc comment) - only Render chunks have anything worth
+                // showing (Ingest/Align/Optimize tasks don't produce a
+                // displayable canvas region).
+                if (stage != ::WindowsApp::Core::PipelineStage::STAGE3_RENDER || !task.outputBlobId.has_value())
+                {
+                    return;
+                }
+
+                auto strongThis{ weakThis.get() };
+                if (!strongThis) return;
+
+                auto pixels = strongThis->m_stitchStorage.ReadPixelBuffer(task.outputBlobId.value());
+                if (!pixels.has_value()) return;
+
+                int xOffset = 0, yOffset = 0;
+                bool foundChunk = false;
+                for (const auto& chunk : strongThis->m_stitchProject.GetChunks())
+                {
+                    if (chunk.id == task.unitKey)
+                    {
+                        xOffset = chunk.x_offset;
+                        yOffset = chunk.y_offset;
+                        foundChunk = true;
+                        break;
+                    }
+                }
+                if (!foundChunk) return;
+
+                // Format conversion (RGB48 -> BGRA8) happens here, off the
+                // UI thread, since it's the expensive part - only the
+                // actual WriteableBitmap buffer write + Invalidate (cheap)
+                // needs to run on the UI thread. Wrapped in a shared_ptr
+                // so the DispatcherQueueHandler delegate stays copyable.
+                auto pixelsPtr = std::make_shared<::WindowsApp::Core::PixelBuffer>(std::move(pixels.value()));
+                dispatcher.TryEnqueue([weakThis, pixelsPtr, xOffset, yOffset]
+                {
+                    if (auto strongThis2{ weakThis.get() })
+                    {
+                        strongThis2->BlitRenderedChunk(*pixelsPtr, xOffset, yOffset);
+                    }
+                });
+            });
 
         m_stitchThread = std::jthread([this, weakThis, dispatcher, token]()
         {
@@ -468,6 +526,86 @@ namespace winrt::WindowsApp::implementation
         // re-enables Start.
         m_stitchStopSource.request_stop();
         StitchStatusText().Text(L"Cancelling - finishing in-flight work...");
+    }
+
+    void MainWindow::BlitRenderedChunk(const ::WindowsApp::Core::PixelBuffer& pixels, int xOffset, int yOffset)
+    {
+        if (!m_renderCanvas) return;
+
+        int canvasWidth = m_renderCanvas.PixelWidth();
+        int canvasHeight = m_renderCanvas.PixelHeight();
+
+        // IBuffer::data() (a C++/WinRT convenience extension, not a
+        // projected WinRT member) hands back the raw backing pointer
+        // directly - avoids the classic IBufferByteAccess/robuffer.h COM
+        // interop dance, which also isn't safe to include here anyway
+        // (its raw ::Windows namespace collides with this file's
+        // `using namespace winrt;` + `using namespace Windows::Storage;`).
+        auto buffer = m_renderCanvas.PixelBuffer();
+        BYTE* canvasBytes = buffer.data();
+
+        const int canvasStride = canvasWidth * 4; // BGRA8, tightly packed
+
+        // Destination rectangle for this chunk in the (possibly
+        // downsampled - see m_renderPreviewScale's declaration)
+        // preview canvas. Point-sampling (nearest-neighbor) the source
+        // for each destination pixel, not the other way around, so a
+        // downscale never leaves gaps - fine for a live progress
+        // preview, no need for real filtering.
+        int dstX0 = static_cast<int>(xOffset * m_renderPreviewScale);
+        int dstY0 = static_cast<int>(yOffset * m_renderPreviewScale);
+        int dstWidth = (std::max)(1, static_cast<int>(pixels.width * m_renderPreviewScale));
+        int dstHeight = (std::max)(1, static_cast<int>(pixels.height * m_renderPreviewScale));
+
+        for (int dy = 0; dy < dstHeight; ++dy)
+        {
+            int canvasY = dstY0 + dy;
+            if (canvasY < 0 || canvasY >= canvasHeight) continue;
+
+            int srcY = (std::min)(pixels.height - 1, static_cast<int>(dy / m_renderPreviewScale));
+            const unsigned short* srcRow = pixels.data.data() + static_cast<size_t>(srcY) * pixels.width * 3;
+            BYTE* dstRow = canvasBytes + static_cast<size_t>(canvasY) * canvasStride;
+
+            for (int dx = 0; dx < dstWidth; ++dx)
+            {
+                int canvasX = dstX0 + dx;
+                if (canvasX < 0 || canvasX >= canvasWidth) continue;
+
+                int srcX = (std::min)(pixels.width - 1, static_cast<int>(dx / m_renderPreviewScale));
+
+                unsigned short r = srcRow[static_cast<size_t>(srcX) * 3 + 0];
+                unsigned short g = srcRow[static_cast<size_t>(srcX) * 3 + 1];
+                unsigned short b = srcRow[static_cast<size_t>(srcX) * 3 + 2];
+
+                BYTE* dstPixel = dstRow + static_cast<size_t>(canvasX) * 4;
+                dstPixel[0] = static_cast<BYTE>(b >> 8);
+                dstPixel[1] = static_cast<BYTE>(g >> 8);
+                dstPixel[2] = static_cast<BYTE>(r >> 8);
+                dstPixel[3] = 0xFF;
+            }
+        }
+
+        m_renderCanvas.Invalidate();
+    }
+
+    void MainWindow::ComputeBackendComboBox_SelectionChanged(
+        Windows::Foundation::IInspectable const& /* sender */,
+        Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& /* args */)
+    {
+        switch (ComputeBackendComboBox().SelectedIndex())
+        {
+        case 1: m_computeBackendPreference = ::WindowsApp::ComputeBackendKind::Cuda; break;
+        case 2: m_computeBackendPreference = ::WindowsApp::ComputeBackendKind::Vulkan; break;
+        case 3: m_computeBackendPreference = ::WindowsApp::ComputeBackendKind::Cpu; break;
+        default: m_computeBackendPreference = ::WindowsApp::ComputeBackendKind::Auto; break;
+        }
+
+        // The already-initialized backend (if any) was picked under the
+        // previous preference - force SelectComputeBackend() to run again
+        // with the new one on the next Start Stitch click instead of
+        // silently keeping whatever backend the first run happened to
+        // pick.
+        m_computeInitialized = false;
     }
 
     winrt::fire_and_forget MainWindow::StitchExportButton_Click(

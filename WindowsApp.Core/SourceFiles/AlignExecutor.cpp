@@ -163,29 +163,13 @@ namespace WindowsApp::Core
             return false;
         }
 
-        ImageLoader loader;
-        if (!loader.Open(image->file_path))
-        {
-            task.errorMessage = "ImageLoader::Open failed for the source file.";
-            return false;
-        }
-
-        std::vector<unsigned char> jpegBytes;
-        if (!loader.GetEmbeddedPreviewJpeg(jpegBytes))
-        {
-            std::wstring loaderError = loader.GetLastError();
-            task.errorMessage = "GetEmbeddedPreviewJpeg failed: " + std::string(loaderError.begin(), loaderError.end());
-            return false;
-        }
-
-        unsigned char* decodedRgb = nullptr;
+        std::vector<unsigned char> rgb;
         int width = 0;
         int height = 0;
-        Compute::ComputeResult decodeResult = m_nvJpegCodec->Decode(
-            jpegBytes.data(), jpegBytes.size(), &decodedRgb, &width, &height);
-        if (decodeResult != Compute::ComputeResult::SUCCESS)
+        std::string decodeError;
+        if (!DecodePreviewRgb8(image->file_path, image->cfaType, *m_nvJpegCodec, rgb, width, height, decodeError))
         {
-            task.errorMessage = "NvJpegCodec::Decode failed: " + std::string(m_nvJpegCodec->GetLastError());
+            task.errorMessage = decodeError;
             return false;
         }
 
@@ -194,11 +178,9 @@ namespace WindowsApp::Core
         int detectedCount = 0;
 
         Compute::ComputeResult featureResult = m_cudaPipeline->DetectAndDescribeFeatures(
-            decodedRgb, width, height,
+            rgb.data(), width, height,
             points.data(), reinterpret_cast<Compute::BriefDescriptor*>(descriptorWords.data()),
             &detectedCount, kMaxFeatures);
-
-        m_nvJpegCodec->FreeDecoded(decodedRgb);
 
         if (featureResult != Compute::ComputeResult::SUCCESS)
         {
@@ -211,7 +193,7 @@ namespace WindowsApp::Core
 
         if (detectedCount == 0)
         {
-            task.errorMessage = "DetectAndDescribeFeatures found 0 features in the embedded preview.";
+            task.errorMessage = "DetectAndDescribeFeatures found 0 features in the preview.";
             return false;
         }
 

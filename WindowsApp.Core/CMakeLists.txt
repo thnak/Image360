@@ -29,6 +29,7 @@ set(CORE_SOURCES
     SourceFiles/StorageEngine.cpp
     SourceFiles/TaskScheduler.cpp
     SourceFiles/TextEncoding.cpp
+    stb/stb_image_impl.cpp
 )
 
 # Tiered SIMD kernels (MedianStack/WarpPerspective/BayerDemosaic) - each

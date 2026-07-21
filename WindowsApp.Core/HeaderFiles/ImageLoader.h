@@ -1,5 +1,6 @@
 #pragma once
 #include "Types.h"
+#include "IImageCodec.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -38,6 +39,53 @@ namespace WindowsApp::Core
         float camMul[4] = { 1.0f, 1.0f, 1.0f, 1.0f };  // per-channel WB multipliers
         float rgbCam[3][4] = {};                        // camera RGB -> sRGB matrix
     };
+
+    // True for a standard .jpg/.jpeg path (case-insensitive) - these
+    // aren't RAW files (no CFA data to demosaic), so RawIngestExecutor
+    // checks this before ever calling ImageLoader::Open, which would
+    // otherwise hand a plain consumer JPEG to LibRaw and fail. Decoded via
+    // JpegCodec/NvJpegCodec (GPU-capable where available), not stb_image.
+    bool IsJpegFile(const std::wstring& path);
+
+    // True for any other standard (non-RAW, non-JPEG) image format this
+    // app can decode via vendored stb_image: PNG, BMP, GIF, TGA, TIFF.
+    bool IsStandardImageFile(const std::wstring& path);
+
+    // Header-only dimension read (no full decode) for any format
+    // IsJpegFile or IsStandardImageFile recognizes - stb_image's info
+    // reader covers JPEG too, so this is the one dimension-probe both
+    // branches of RawIngestExecutor's non-RAW path share (see
+    // MainWindow::StitchStartButton_Click's picking loop).
+    bool GetStandardImageDimensions(const std::wstring& path, int& outWidth, int& outHeight);
+
+    // Decodes a non-RAW, non-JPEG standard image format (PNG/BMP/GIF/TGA/
+    // TIFF, via vendored stb_image) to RGB48. JPEG specifically still
+    // goes through JpegCodec/NvJpegCodec instead (see
+    // RawIngestExecutor::ExecuteJpegIngest) - already GPU-capable where
+    // available, no reason to route it through stb_image too.
+    bool DecodeStandardImage(const std::wstring& path, PixelBuffer& output);
+
+    // Same as DecodeStandardImage but leaves the result at 8 bits/channel
+    // (no RGB48 widening) - for callers like DecodePreviewRgb8 that want
+    // interleaved RGB8 directly, matching what IImageCodec::Decode
+    // already produces for the JPEG case.
+    bool DecodeStandardImageRgb8(const std::wstring& path, std::vector<unsigned char>& outRgb,
+                                  int& outWidth, int& outHeight);
+
+    // Decodes a small RGB8 preview of an input image for feature
+    // detection (AlignExecutor) / gain-color-transfer (OptimizeExecutor)
+    // - both need "a reasonably-sized RGB8 decode", not the full-res
+    // RGB48 pipeline data. RAW files (cfaType != STANDARD_RGB) use their
+    // embedded JPEG preview (cheap, no full demosaic, exactly what both
+    // callers did before this existed); STANDARD_RGB files (plain JPEG/
+    // PNG/BMP/GIF/TGA/TIFF - see RawIngestExecutor) have no separate
+    // "preview" to extract, so this just decodes them directly (JPEG via
+    // jpegCodec, everything else via stb_image). On failure, returns
+    // false and outError describes what went wrong (mirrors the
+    // task.errorMessage convention both callers already use).
+    bool DecodePreviewRgb8(const std::wstring& filePath, CfaType cfaType, Compute::IImageCodec& jpegCodec,
+                           std::vector<unsigned char>& outRgb, int& outWidth, int& outHeight,
+                           std::string& outError);
 
     class ImageLoader
     {
