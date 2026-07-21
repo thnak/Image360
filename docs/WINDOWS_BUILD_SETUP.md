@@ -112,12 +112,19 @@ output).
 
 This mirrors the two commands documented in `CLAUDE.md`:
 ```powershell
-dotnet msbuild WindowsApp.slnx /p:Configuration=Debug /p:Platform=x64
-dotnet msbuild WindowsApp.slnx /p:Configuration=Debug /p:Platform=x64 /t:"WindowsApp (Package)"
+msbuild WindowsApp.slnx /p:Configuration=Debug /p:Platform=x64
+msbuild WindowsApp.slnx /p:Configuration=Debug /p:Platform=x64 /t:"WindowsApp (Package)"
 ```
 but locates and imports the VS Developer environment first, so it works
 from any PowerShell prompt without manually launching "Developer PowerShell
-for VS 2022" beforehand.
+for VS 2022" beforehand. **Use the real `msbuild.exe`, not `dotnet
+msbuild`** — confirmed 2026-07-21 on a real build: `dotnet msbuild` fails to
+resolve `$(VCTargetsPath)` for the vcxproj/wapproj projects even *inside* a
+correctly-initialized VS Developer environment (`vcvars64.bat` run first),
+so this isn't a "wrong environment" problem as the troubleshooting table
+below used to claim — it's specific to invoking through the .NET SDK's
+bundled MSBuild at all. `scripts/build.ps1` already gets this right (calls
+`msbuild` directly, never `dotnet msbuild`).
 
 ### Building from the Visual Studio IDE instead
 
@@ -163,7 +170,7 @@ separate decision — see the project's plan files for where that's headed.
 
 | Error | Likely cause | Fix |
 |---|---|---|
-| `MSB4278: $(VCTargetsPath)/Microsoft.Cpp.Default.props does not exist` | Not running in a VS Developer environment (e.g. ran `dotnet msbuild` directly instead of `scripts/build.ps1`, or the script's `Enter-VsDevShell` step failed) | Use `scripts/build.ps1`, or open a "Developer PowerShell for VS 2022" manually before running `msbuild` |
+| `MSB4278: $(VCTargetsPath)/Microsoft.Cpp.Default.props does not exist` | Ran `dotnet msbuild` instead of the real `msbuild.exe` — confirmed 2026-07-21 that this fails even inside a correctly-initialized VS Developer environment, it's not an environment problem | Use `scripts/build.ps1` (calls real `msbuild`), or run plain `msbuild` (not `dotnet msbuild`) after opening a "Developer PowerShell for VS 2022" / running `vcvars64.bat` |
 | `MSB4019: ... Microsoft.DesktopBridge.props ... was not found` | "Universal Windows Platform development" workload missing | Add it via the Visual Studio Installer, then re-run |
 | Import error naming `CUDA 13.3.props`/`.targets` | CUDA Toolkit installed before VS, or a VS repair/update after CUDA removed the integration | Re-run the CUDA 13.3 installer, choose "Modify," reinstall the Visual Studio integration |
 | Missing Windows App SDK / C++-WinRT headers (`winrt/Microsoft.*.h` not found) | NuGet packages not restored | Restore manually via VS's "Restore NuGet Packages" (§4), then rebuild |

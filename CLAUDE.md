@@ -39,15 +39,19 @@ assume ASP.NET/Blazor conventions here.
 Requires Visual Studio 2022+ with the Desktop C++ + Windows App SDK workload,
 and CUDA Toolkit 13.3 (build customizations are referenced by exact version in
 `WindowsApp.Compute.vcxproj`). Building the CUDA and WinUI/packaging pieces
-generally requires the Visual Studio IDE or `msbuild`/`dotnet msbuild`; a
-plain `dotnet build` will not work since this is not a .NET solution.
+requires the Visual Studio IDE or the real `msbuild.exe` from a VS Developer
+shell — **`dotnet msbuild` does NOT work here**, confirmed 2026-07-21: the
+.NET SDK's bundled MSBuild can't resolve `$(VCTargetsPath)` for the vcxproj/
+wapproj projects (`error MSB4278: ... Microsoft.Cpp.Default.props ... does
+not exist`), even after `vcvars64.bat`. A plain `dotnet build` won't work
+either, since this is not a .NET solution.
 
 ```powershell
-# Build the whole solution (from repo root, in a VS Developer shell)
-dotnet msbuild WindowsApp.slnx /p:Configuration=Debug /p:Platform=x64
+# From a VS Developer Command Prompt / after vcvars64.bat (real msbuild.exe, not `dotnet msbuild`)
+msbuild WindowsApp.slnx /p:Configuration=Debug /p:Platform=x64
 
 # Build/run just the packaged app for deployment/testing
-dotnet msbuild WindowsApp.slnx /p:Configuration=Debug /p:Platform=x64 /t:"WindowsApp (Package)"
+msbuild WindowsApp.slnx /p:Configuration=Debug /p:Platform=x64 /t:"WindowsApp (Package)"
 ```
 
 Only `x64` is meaningful today — `WindowsApp.Compute` (CUDA) only has
