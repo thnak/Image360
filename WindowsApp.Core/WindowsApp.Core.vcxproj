@@ -88,6 +88,7 @@
     <ClInclude Include="HeaderFiles\BundleAdjustment.h" />
     <ClInclude Include="HeaderFiles\OverlapCulling.h" />
     <ClInclude Include="HeaderFiles\RenderExecutor.h" />
+    <ClInclude Include="HeaderFiles\SeamBlendKernels.h" />
     <ClInclude Include="HeaderFiles\PanoramaExporter.h" />
     <ClInclude Include="HeaderFiles\TextEncoding.h" />
     <ClInclude Include="HeaderFiles\PlatformFile.h" />
@@ -146,6 +147,9 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="SourceFiles\RenderExecutor.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\SeamBlend.cpp">
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="SourceFiles\PanoramaExporter.cpp">

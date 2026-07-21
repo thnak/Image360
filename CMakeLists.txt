@@ -67,6 +67,7 @@ endif()
 enable_testing()
 add_subdirectory(tests/engine_smoke)
 add_subdirectory(tests/raw_probe)
+add_subdirectory(tests/render_blend)
 add_subdirectory(tests/pipeline_e2e)
 
 if(IMAGE360_HAVE_VULKAN)

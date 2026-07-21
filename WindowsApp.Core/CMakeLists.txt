@@ -26,6 +26,7 @@ set(CORE_SOURCES
     SourceFiles/RawIngestExecutor.cpp
     SourceFiles/RenderExecutor.cpp
     SourceFiles/RgbToGray.cpp
+    SourceFiles/SeamBlend.cpp
     SourceFiles/StorageEngine.cpp
     SourceFiles/TaskScheduler.cpp
     SourceFiles/TextEncoding.cpp

@@ -1,7 +1,7 @@
 #include "pch.h"
 #include "HeaderFiles/RenderExecutor.h"
 #include "HeaderFiles/HomographyMath.h"
-#include <algorithm>
+#include "HeaderFiles/SeamBlendKernels.h"
 #include <cmath>
 #include <string>
 #include <vector>
@@ -10,9 +10,8 @@ namespace WindowsApp::Core
 {
     namespace
     {
-        // A generous sanity cap on contributors per chunk - no longer tied
-        // to a kernel-imposed limit (combining is now the per-pixel
-        // CombineIgnoringGaps below, not IComputeBackend::MedianStack).
+        // A generous sanity cap on contributors per chunk - Kernels::SeamBlend
+        // has no hard cap of its own, this is just a defensive bound.
         constexpr size_t kMaxContributorsForMedianStack = 32;
 
         std::optional<int64_t> FindColorBlobId(ProjectManager& projectManager, int imageId)
@@ -28,51 +27,6 @@ namespace WindowsApp::Core
             return std::nullopt;
         }
 
-        // IComputeBackend::MedianStack has no notion of "this contributor
-        // doesn't cover this pixel" - it just sees numbers, and
-        // WarpPerspective correctly writes (0,0,0) for destination pixels
-        // outside the source image's bounds. Chunk contributors usually
-        // only pairwise-overlap a fraction of a chunk (that's the whole
-        // point of stitching), so at most pixels only 1 of N contributors
-        // actually has real data there - stacking blindly across all N via
-        // MedianStack (e.g. median of real,0,0) collapses those pixels to
-        // 0, effectively erasing most of the chunk outside the few regions
-        // where a majority of contributors happen to overlap. Combine
-        // per-pixel instead: only contributors whose warped RGB triple
-        // isn't exactly (0,0,0) - "no data here" - participate in that
-        // pixel's result. A pixel with zero valid contributors stays 0
-        // (genuinely nothing covers it); this approximates "all-zero ==
-        // no data" rather than tracking a real per-pixel validity mask
-        // through WarpPerspective, which would need touching every SIMD
-        // tier and the CUDA kernel for a proper fix.
-        void CombineIgnoringGaps(const std::vector<std::vector<unsigned short>>& warpedBuffers,
-                                  size_t chunkPixelCount, std::vector<unsigned short>& outResult)
-        {
-            outResult.assign(chunkPixelCount, 0);
-
-            std::vector<unsigned short> channelSamples;
-            channelSamples.reserve(warpedBuffers.size());
-
-            for (size_t idx = 0; idx < chunkPixelCount; idx += 3)
-            {
-                for (int c = 0; c < 3; ++c)
-                {
-                    channelSamples.clear();
-                    for (const auto& buf : warpedBuffers)
-                    {
-                        bool hasData = buf[idx] != 0 || buf[idx + 1] != 0 || buf[idx + 2] != 0;
-                        if (hasData) channelSamples.push_back(buf[idx + c]);
-                    }
-                    if (channelSamples.empty()) continue; // stays 0 - nothing covers this pixel
-
-                    std::sort(channelSamples.begin(), channelSamples.end());
-                    size_t mid = channelSamples.size() / 2;
-                    outResult[idx + c] = (channelSamples.size() % 2 == 0)
-                        ? static_cast<unsigned short>((channelSamples[mid - 1] + channelSamples[mid] + 1) / 2)
-                        : channelSamples[mid];
-                }
-            }
-        }
     }
 
     RenderExecutor::RenderExecutor(ProjectManager& projectManager, StorageEngine& storageEngine,
@@ -168,13 +122,22 @@ namespace WindowsApp::Core
         result.width = chunk->width;
         result.height = chunk->height;
 
-        // Multi-band blending isn't wired in here (see this plan's own
-        // header note: CudaPipeline::MultiBandBlend is pairwise, doesn't
-        // fit N-way chunk contributors as-is) - a per-pixel, gap-aware
-        // median (see CombineIgnoringGaps above) is the consensus/seam-
-        // handling step for this v1 pass, not IComputeBackend::MedianStack
-        // directly (which has no notion of per-pixel coverage gaps).
-        CombineIgnoringGaps(warpedBuffers, chunkPixelCount, result.data);
+        // Seam-aware N-way multi-band blend (Kernels::SeamBlend) replaces
+        // a plain per-pixel median/average across contributors: averaging
+        // wherever contributors disagree (e.g. a nearby object at a
+        // slightly different position in each warp due to real camera
+        // parallax) produced ghosting - a translucent double-image of
+        // that object. SeamBlend instead picks a single owning contributor
+        // per pixel (steering the ownership boundary away from
+        // high-disagreement content where possible) and blends only the
+        // transition itself via a Laplacian pyramid, so there's no visible
+        // hard seam either. Runs on the plain host RGB48 buffers already
+        // produced above, independent of which IComputeBackend did the
+        // warping.
+        std::vector<const unsigned short*> warpedBufferPtrs;
+        warpedBufferPtrs.reserve(warpedBuffers.size());
+        for (const auto& buf : warpedBuffers) warpedBufferPtrs.push_back(buf.data());
+        Kernels::SeamBlend::BlendChunkContributors(warpedBufferPtrs, chunk->width, chunk->height, result.data);
 
         auto blobId = m_storageEngine.WritePixelBuffer(result, "rendered_chunk_rgb48");
         if (!blobId.has_value()) return false;
