@@ -113,6 +113,8 @@
     <ClInclude Include="HeaderFiles\ExposureFusionKernel.h" />
     <ClInclude Include="HeaderFiles\SubPixelRefineKernel.h" />
     <ClInclude Include="HeaderFiles\StructureTensorMergeKernel.h" />
+    <ClInclude Include="HeaderFiles\NightSightMotionMeter.h" />
+    <ClInclude Include="HeaderFiles\PainterlyToneCurveKernel.h" />
     <ClInclude Include="sqlite3\sqlite3.h" />
     <ClInclude Include="sqlite3\sqlite3ext.h" />
     <ClInclude Include="stb\stb_image.h" />
@@ -221,6 +223,12 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="SourceFiles\StructureTensorMergeKernel.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\NightSightMotionMeter.cpp">
+      <PrecompiledHeader>Use</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="SourceFiles\PainterlyToneCurveKernel.cpp">
       <PrecompiledHeader>Use</PrecompiledHeader>
     </ClCompile>
     <!-- Tiered SIMD kernels - one TU per tier (MSVC has no GCC-style

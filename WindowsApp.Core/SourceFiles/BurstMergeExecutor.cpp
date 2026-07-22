@@ -4,6 +4,8 @@
 #include "HeaderFiles/BlockMatchAlignKernel.h"
 #include "HeaderFiles/SubPixelRefineKernel.h"
 #include "HeaderFiles/ExposureFusionKernel.h"
+#include "HeaderFiles/NightSightMotionMeter.h"
+#include "HeaderFiles/PainterlyToneCurveKernel.h"
 
 #include <cmath>
 #include <string>
@@ -24,9 +26,10 @@ namespace WindowsApp::Core
         if (token.stop_requested()) return false;
 
         BurstMode mode = m_projectManager.GetBurstMode();
-        if (mode != BurstMode::MFNR && mode != BurstMode::HDR_PLUS && mode != BurstMode::SUPER_RES)
+        if (mode != BurstMode::MFNR && mode != BurstMode::HDR_PLUS && mode != BurstMode::SUPER_RES
+            && mode != BurstMode::NIGHT_SIGHT)
         {
-            task.errorMessage = "BurstMergeExecutor: not yet implemented for this BurstMode (only MFNR/HDR_PLUS/SUPER_RES are implemented).";
+            task.errorMessage = "BurstMergeExecutor: not yet implemented for this BurstMode (only MFNR/HDR_PLUS/SUPER_RES/NIGHT_SIGHT are implemented).";
             return false;
         }
 
@@ -84,7 +87,8 @@ namespace WindowsApp::Core
         out.tilesY = (out.referenceBuffer.height + kBurstTileSize - 1) / kBurstTileSize;
 
         out.nonReferenceBuffers.reserve(nonReferenceTasks.size());
-        bool useSubPixelOffsets = m_projectManager.GetBurstMode() == BurstMode::SUPER_RES;
+        BurstMode gatherMode = m_projectManager.GetBurstMode();
+        bool useSubPixelOffsets = gatherMode == BurstMode::SUPER_RES || gatherMode == BurstMode::NIGHT_SIGHT;
         if (useSubPixelOffsets) out.perFrameOffsetsF.reserve(nonReferenceTasks.size());
         else out.perFrameOffsets.reserve(nonReferenceTasks.size());
 
@@ -148,20 +152,46 @@ namespace WindowsApp::Core
         Compute::ComputeResult result;
         PixelBuffer merged;
 
-        if (mode == BurstMode::SUPER_RES)
+        if (mode == BurstMode::SUPER_RES || mode == BurstMode::NIGHT_SIGHT)
         {
-            std::vector<const Compute::TileOffsetF*> offsetPtrsF;
-            offsetPtrsF.reserve(gathered.perFrameOffsetsF.size());
-            for (const auto& offsets : gathered.perFrameOffsetsF) offsetPtrsF.push_back(offsets.data());
+            // NIGHT_SIGHT-only: meter motion over the non-reference frames
+            // and drop unusably-shifted ones before building framePtrs/
+            // offsetPtrsF (docs/superpowers/plans/2026-07-22-night-sight.md
+            // Architecture SS1/3) - SUPER_RES keeps every frame, matching
+            // its existing unchanged behavior.
+            std::vector<bool> keepFrame(gathered.perFrameOffsetsF.size(), true);
+            float noiseVariance = kSuperResNoiseVariance;
+            int scaleFactor = kSuperResScaleFactor;
 
-            merged.width = gathered.referenceBuffer.width * kSuperResScaleFactor;
-            merged.height = gathered.referenceBuffer.height * kSuperResScaleFactor;
+            if (mode == BurstMode::NIGHT_SIGHT)
+            {
+                Kernels::MotionMeteringResult metering =
+                    Kernels::MeterMotion(gathered.perFrameOffsetsF, kNightSightBaseNoiseVariance);
+                keepFrame = metering.keepFrame;
+                noiseVariance = metering.noiseVariance;
+                scaleFactor = kNightSightScaleFactor;
+            }
+
+            std::vector<const unsigned short*> filteredFramePtrs;
+            std::vector<const Compute::TileOffsetF*> offsetPtrsF;
+            filteredFramePtrs.reserve(framePtrs.size());
+            offsetPtrsF.reserve(gathered.perFrameOffsetsF.size());
+            filteredFramePtrs.push_back(gathered.referenceBuffer.data.data());
+            for (size_t i = 0; i < gathered.perFrameOffsetsF.size(); ++i)
+            {
+                if (!keepFrame[i]) continue;
+                filteredFramePtrs.push_back(gathered.nonReferenceBuffers[i].data.data());
+                offsetPtrsF.push_back(gathered.perFrameOffsetsF[i].data());
+            }
+
+            merged.width = gathered.referenceBuffer.width * scaleFactor;
+            merged.height = gathered.referenceBuffer.height * scaleFactor;
             merged.data.resize(static_cast<size_t>(merged.width) * merged.height * 3);
 
             result = m_computeBackend->StructureTensorKernelRegression(
-                framePtrs.data(), static_cast<int>(framePtrs.size()), offsetPtrsF.data(),
+                filteredFramePtrs.data(), static_cast<int>(filteredFramePtrs.size()), offsetPtrsF.data(),
                 gathered.referenceBuffer.width, gathered.referenceBuffer.height, kBurstTileSize,
-                gathered.tilesX, gathered.tilesY, kSuperResScaleFactor, kSuperResNoiseVariance,
+                gathered.tilesX, gathered.tilesY, scaleFactor, noiseVariance,
                 merged.data.data());
         }
         else
@@ -264,6 +294,34 @@ namespace WindowsApp::Core
             return true;
         }
 
+        if (m_projectManager.GetBurstMode() == BurstMode::NIGHT_SIGHT)
+        {
+            auto mergedBuffer = m_storageEngine.ReadPixelBuffer(*mergeTasks[0].outputBlobId);
+            if (!mergedBuffer.has_value())
+            {
+                task.errorMessage = "Failed to read BURST_MERGE's output PixelBuffer.";
+                return false;
+            }
+
+            PixelBuffer toneMapped;
+            toneMapped.width = mergedBuffer->width;
+            toneMapped.height = mergedBuffer->height;
+            Kernels::PainterlyToneCurve::Apply(
+                mergedBuffer->data.data(), mergedBuffer->width, mergedBuffer->height,
+                kNightSightShadowGamma, kNightSightHighlightRolloff, kNightSightVignetteStrength,
+                toneMapped.data);
+
+            auto blobId = m_storageEngine.WritePixelBuffer(toneMapped, "raw_rgb48");
+            if (!blobId.has_value())
+            {
+                task.errorMessage = "Failed to write BURST_FINISH's tone-mapped output.";
+                return false;
+            }
+
+            task.outputBlobId = blobId;
+            return true;
+        }
+
         auto bytes = m_storageEngine.ReadBlob(*mergeTasks[0].outputBlobId);
         if (!bytes.has_value())
         {
@@ -273,8 +331,8 @@ namespace WindowsApp::Core
 
         // Passthrough: copies the exact bytes (including WritePixelBuffer's
         // embedded width/height header) forward under a new blob, rather
-        // than round-tripping through PixelBuffer - neither MFNR's nor
-        // SUPER_RES's BURST_FINISH has an actual transformation to apply
+        // than round-tripping through PixelBuffer - only MFNR's and
+        // SUPER_RES's BURST_FINISH have no actual transformation to apply
         // in this phase's scope (see this class's header comment).
         auto blobId = m_storageEngine.WriteBlob(bytes->data(), bytes->size(), "raw_rgb48");
         if (!blobId.has_value())

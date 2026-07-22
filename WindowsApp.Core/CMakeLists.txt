@@ -30,6 +30,8 @@ set(CORE_SOURCES
     SourceFiles/BurstAlignExecutor.cpp
     SourceFiles/BurstMergeExecutor.cpp
     SourceFiles/ExposureFusionKernel.cpp
+    SourceFiles/NightSightMotionMeter.cpp
+    SourceFiles/PainterlyToneCurveKernel.cpp
     SourceFiles/RobustMergeKernel.cpp
     SourceFiles/SeamBlend.cpp
     SourceFiles/StructureTensorMergeKernel.cpp

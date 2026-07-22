@@ -53,6 +53,47 @@ namespace WindowsApp::Core
     inline constexpr float kSuperResNoiseVariance = 4000000.0f;
     inline constexpr int kSubPixelRefineIterations = 6;
 
+    // Night Sight (docs/superpowers/plans/2026-07-22-night-sight.md) -
+    // reuses StructureTensorKernelRegression (same as Super Res Zoom) but
+    // at native resolution (scaleFactor=1, no upsampling) with a motion-
+    // metered noiseVariance instead of a fixed constant. kNightSight*Noise*
+    // is the base value Kernels::MeterMotion scales (same "typical camera
+    // ISO, not calibrated per-ISO" scope cut as kSuperResNoiseVariance).
+    inline constexpr int kNightSightScaleFactor = 1;
+    inline constexpr float kNightSightBaseNoiseVariance = 4000000.0f;
+
+    // MeterMotion's frame-exclusion thresholds: a non-reference frame is
+    // dropped if its mean per-tile offset magnitude exceeds the burst's
+    // median by this relative factor, OR exceeds this absolute pixel
+    // floor outright (near kBurstSearchRadius - BlockMatchAlign's own
+    // reliability boundary, independent of the rest of the burst). Never
+    // excludes below this many kept non-reference frames.
+    inline constexpr float kNightSightMotionExclusionRelativeFactor = 2.5f;
+    inline constexpr float kNightSightMotionExclusionAbsolutePx = 6.0f;
+    inline constexpr int kNightSightMinKeptNonReferenceFrames = 2;
+
+    // MeterMotion's noiseVariance scale = clamp(1 + gain*(referencePx -
+    // meanKeptMotion), minScale, maxScale) - a burst whose aggregate
+    // motion is below this reference point (tripod-like, confident
+    // alignment) gets a LARGER noiseVariance (more permissive, more
+    // denoising); above it (handheld-like, less confident alignment) gets
+    // a SMALLER one (tighter agreement required, ghost-safer). Bounded so
+    // a pathological input can't zero out or blow up the parameter.
+    inline constexpr float kNightSightMotionReferencePx = 3.0f;
+    inline constexpr float kNightSightNoiseVarianceGain = 0.08f;
+    inline constexpr float kNightSightNoiseVarianceMinScale = 0.4f;
+    inline constexpr float kNightSightNoiseVarianceMaxScale = 1.5f;
+
+    // PainterlyToneCurve's BURST_FINISH parameters (docs/
+    // COMPUTATIONAL_PHOTOGRAPHY.md SS2.2) - real-but-untuned defaults, same
+    // scope cut as kHdrPlusBrightGamma/kHdrPlusDarkGamma. shadowGamma > 1
+    // crushes shadows/midtones; highlightRolloff softly compresses
+    // highlights; vignetteStrength darkens the image radially outward from
+    // center ("darkened surrounds").
+    inline constexpr float kNightSightShadowGamma = 1.5f;
+    inline constexpr float kNightSightHighlightRolloff = 0.2f;
+    inline constexpr float kNightSightVignetteStrength = 0.35f;
+
     // The lowest-id frame (the first one added) is the alignment/merge
     // reference - not necessarily images.front(), since GetInputImages()'s
     // ordering isn't part of its documented contract.

@@ -15,17 +15,24 @@ namespace WindowsApp::Core
     // multiple PipelineStage keys in TaskScheduler's map). docs/
     // superpowers/plans/2026-07-21-mfnr-block-match-merge.md Task 5,
     // extended for HDR+ by docs/superpowers/plans/
-    // 2026-07-21-hdrplus-tile-fft-merge.md Task 3, and for Super Res Zoom
-    // by docs/superpowers/plans/2026-07-21-superres-structure-tensor-merge.md
-    // Task 3.
+    // 2026-07-21-hdrplus-tile-fft-merge.md Task 3, for Super Res Zoom by
+    // docs/superpowers/plans/2026-07-21-superres-structure-tensor-merge.md
+    // Task 3, and for Night Sight by docs/superpowers/plans/
+    // 2026-07-22-night-sight.md Tasks 3-5.
     //
     // BURST_MERGE: reads every BURST_ALIGN task's decoded frame + (for
     // non-reference frames) its TileOffset/TileOffsetF field, then runs
     // IComputeBackend::RobustMergeAccumulate (MFNR), ::TileFftMerge
-    // (HDR_PLUS), or ::StructureTensorKernelRegression (SUPER_RES) - three
-    // genuinely different merge algorithms, not parameter variants, per
-    // docs/COMPUTATIONAL_PHOTOGRAPHY.md SS2.3 - and writes the merged
-    // buffer (upsampled, for SUPER_RES).
+    // (HDR_PLUS), or ::StructureTensorKernelRegression (SUPER_RES/
+    // NIGHT_SIGHT) - three genuinely different merge algorithms (not four -
+    // Night Sight reuses Super Res Zoom's merge kernel, per
+    // docs/COMPUTATIONAL_PHOTOGRAPHY.md SS2.2), not parameter variants,
+    // per SS2.3 - and writes the merged buffer (upsampled by
+    // kSuperResScaleFactor for SUPER_RES, native resolution for
+    // NIGHT_SIGHT). NIGHT_SIGHT additionally runs Kernels::MeterMotion
+    // first to drop unusably-shifted frames and adapt the merge's
+    // noiseVariance (docs/superpowers/plans/2026-07-22-night-sight.md
+    // Architecture SS1/3).
     //
     // BURST_FINISH: MFNR and SUPER_RES are both identity passthroughs -
     // copy BURST_MERGE's output blob forward as this task's own output
@@ -34,12 +41,15 @@ namespace WindowsApp::Core
     // HDR_PLUS is a real transform - two synthetic tone-curve exposures of
     // the merged image, fused via Kernels::ExposureFusion::FuseTwoExposures
     // (exposure-fusion tone mapping, docs/COMPUTATIONAL_PHOTOGRAPHY.md
-    // SS2.1's Finish stage).
+    // SS2.1's Finish stage). NIGHT_SIGHT is also a real transform - a
+    // single-image "painterly" S-curve + vignette via
+    // Kernels::PainterlyToneCurve::Apply, distinct from HDR_PLUS's
+    // multi-exposure fusion (SS2.2's Finish stage).
     //
-    // Both stages only run for BurstMode::MFNR, HDR_PLUS, or SUPER_RES -
-    // any other mode returns false with a clear "not yet implemented for
-    // this BurstMode" task.errorMessage (a genuine failure to surface, not
-    // a legitimately-empty case).
+    // Both stages only run for BurstMode::MFNR, HDR_PLUS, SUPER_RES, or
+    // NIGHT_SIGHT - any other mode returns false with a clear "not yet
+    // implemented for this BurstMode" task.errorMessage (a genuine failure
+    // to surface, not a legitimately-empty case).
     class BurstMergeExecutor : public ITaskExecutor
     {
     public:

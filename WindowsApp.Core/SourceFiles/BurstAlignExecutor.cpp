@@ -84,14 +84,17 @@ namespace WindowsApp::Core
             return false;
         }
 
-        if (m_projectManager.GetBurstMode() == BurstMode::SUPER_RES)
+        BurstMode burstMode = m_projectManager.GetBurstMode();
+        if (burstMode == BurstMode::SUPER_RES || burstMode == BurstMode::NIGHT_SIGHT)
         {
             // Sub-pixel refinement (docs/superpowers/plans/
             // 2026-07-21-superres-structure-tensor-merge.md Task 1/3) -
             // seeded from the integer BlockMatchAlign result just computed
             // above, not a second independent align pass. Serialized as
             // floats instead of BlockMatchAlign's integer format - a mode
-            // branch on the serialization format only.
+            // branch on the serialization format only. NIGHT_SIGHT needs
+            // the same TileOffsetF input StructureTensorKernelRegression
+            // requires (docs/superpowers/plans/2026-07-22-night-sight.md).
             std::vector<Compute::TileOffsetF> refinedOffsets(offsets.size());
             Kernels::RefineOffsetsSubPixel(
                 referenceBuffer.data.data(), buffer.data.data(),
