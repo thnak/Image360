@@ -15,11 +15,14 @@
 #include "HeaderFiles/BayerDemosaicKernels.h"
 #include "HeaderFiles/PipelineDriver.h"
 #include "HeaderFiles/ITaskExecutor.h"
+#include "HeaderFiles/Tiff16Writer.h"
 
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <random>
@@ -433,6 +436,95 @@ namespace
 
         fs::remove_all(tempDir, ec);
     }
+
+    // Tiff16Writer round-trip check (docs/superpowers/plans/
+    // 2026-07-22-cli-front-end.md Task 1) - no TIFF-reading library exists
+    // in-tree, so this test IS the reader: it manually re-parses the
+    // written bytes' header/IFD/tag values/pixel data against the TIFF6
+    // spec's field layout, the same "the test is the only verification
+    // this format is even correct" role WriteTiff16RGB's own header
+    // comment describes.
+    void RunTiff16WriterChecks()
+    {
+        std::cout << "\n=== Tiff16Writer round-trip ===" << std::endl;
+
+        auto ReadU16 = [](const std::vector<unsigned char>& b, size_t off)
+        {
+            return static_cast<uint16_t>(b[off] | (static_cast<uint16_t>(b[off + 1]) << 8));
+        };
+        auto ReadU32 = [](const std::vector<unsigned char>& b, size_t off)
+        {
+            return static_cast<uint32_t>(b[off]) | (static_cast<uint32_t>(b[off + 1]) << 8)
+                 | (static_cast<uint32_t>(b[off + 2]) << 16) | (static_cast<uint32_t>(b[off + 3]) << 24);
+        };
+
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::path tempDir = fs::temp_directory_path() / "image360_tiff16_writer_smoke";
+        fs::remove_all(tempDir, ec);
+        fs::create_directories(tempDir, ec);
+        Check(!ec, "create temp directory (Tiff16Writer)");
+
+        constexpr int width = 3, height = 2;
+        std::vector<unsigned short> pixels(static_cast<size_t>(width) * height * 3);
+        for (size_t i = 0; i < pixels.size(); ++i) pixels[i] = static_cast<unsigned short>(1000 + i * 777);
+
+        fs::path tiffPath = tempDir / "test.tif";
+        Check(WriteTiff16RGB(Utf8ToWide(tiffPath.string()), pixels.data(), width, height),
+              "WriteTiff16RGB succeeds");
+
+        std::ifstream file(tiffPath, std::ios::binary | std::ios::ate);
+        Check(static_cast<bool>(file), "written TIFF file opens for reading");
+        if (file)
+        {
+            std::streamsize size = file.tellg();
+            file.seekg(0, std::ios::beg);
+            std::vector<unsigned char> bytes(static_cast<size_t>(size));
+            file.read(reinterpret_cast<char*>(bytes.data()), size);
+
+            Check(bytes.size() >= 8, "file is at least large enough for a TIFF header");
+            Check(bytes[0] == 'I' && bytes[1] == 'I', "byte order marker is little-endian \"II\"");
+            Check(ReadU16(bytes, 2) == 42, "magic number is 42");
+
+            uint32_t ifdOffset = ReadU32(bytes, 4);
+            size_t pixelDataSize = static_cast<size_t>(width) * height * 3 * sizeof(unsigned short);
+            Check(ifdOffset == 8 + pixelDataSize + 6 + 8 + 8,
+                  "IFD offset lands after header + pixel data + BitsPerSample/XRes/YRes external blocks");
+
+            // Pixel data starts immediately at offset 8 and is byte-identical.
+            bool pixelsMatch = bytes.size() >= 8 + pixelDataSize
+                && std::memcmp(bytes.data() + 8, pixels.data(), pixelDataSize) == 0;
+            Check(pixelsMatch, "pixel data is written byte-identical starting at offset 8");
+
+            if (ifdOffset + 2 <= bytes.size())
+            {
+                uint16_t entryCount = ReadU16(bytes, ifdOffset);
+                Check(entryCount == 12, "IFD declares 12 entries");
+
+                auto ReadTag = [&](int index) { return ReadU16(bytes, ifdOffset + 2 + static_cast<size_t>(index) * 12); };
+                auto ReadValue = [&](int index) { return ReadU32(bytes, ifdOffset + 2 + static_cast<size_t>(index) * 12 + 8); };
+
+                Check(ReadTag(0) == 256 && ReadValue(0) == static_cast<uint32_t>(width), "ImageWidth tag correct");
+                Check(ReadTag(1) == 257 && ReadValue(1) == static_cast<uint32_t>(height), "ImageLength tag correct");
+                Check(ReadTag(3) == 259 && ReadValue(3) == 1, "Compression tag is 1 (none)");
+                Check(ReadTag(4) == 262 && ReadValue(4) == 2, "PhotometricInterpretation tag is 2 (RGB)");
+                Check(ReadTag(5) == 273 && ReadValue(5) == 8, "StripOffsets tag points at offset 8");
+                Check(ReadTag(6) == 277 && ReadValue(6) == 3, "SamplesPerPixel tag is 3");
+                Check(ReadTag(7) == 278 && ReadValue(7) == static_cast<uint32_t>(height), "RowsPerStrip tag equals full height (single strip)");
+                Check(ReadTag(8) == 279 && ReadValue(8) == static_cast<uint32_t>(pixelDataSize), "StripByteCounts tag matches pixel data size");
+
+                // BitsPerSample (tag 258, external SHORT[3] block) - must be {16,16,16}.
+                Check(ReadTag(2) == 258, "BitsPerSample tag id correct");
+                uint32_t bpsOffset = ReadValue(2);
+                bool bpsCorrect = bpsOffset + 6 <= bytes.size()
+                    && ReadU16(bytes, bpsOffset) == 16 && ReadU16(bytes, bpsOffset + 2) == 16
+                    && ReadU16(bytes, bpsOffset + 4) == 16;
+                Check(bpsCorrect, "BitsPerSample external block is {16,16,16}");
+            }
+        }
+
+        fs::remove_all(tempDir, ec);
+    }
 }
 
 int main()
@@ -505,6 +597,7 @@ int main()
     RunCpuComputeBackendChecks();
     RunCrossTierSimdKernelChecks();
     RunBurstPipelineFoundationChecks();
+    RunTiff16WriterChecks();
 
     if (g_failures == 0)
     {

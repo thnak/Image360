@@ -37,6 +37,7 @@ set(CORE_SOURCES
     SourceFiles/StructureTensorMergeKernel.cpp
     SourceFiles/SubPixelRefineKernel.cpp
     SourceFiles/TileFftMergeKernel.cpp
+    SourceFiles/Tiff16Writer.cpp
     SourceFiles/StorageEngine.cpp
     SourceFiles/TaskScheduler.cpp
     SourceFiles/TextEncoding.cpp

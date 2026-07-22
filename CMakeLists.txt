@@ -64,6 +64,8 @@ if(IMAGE360_HAVE_VULKAN)
     add_subdirectory(WindowsApp.Vulkan)
 endif()
 
+add_subdirectory(cli)
+
 enable_testing()
 add_subdirectory(tests/engine_smoke)
 add_subdirectory(tests/raw_probe)
