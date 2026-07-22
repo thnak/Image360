@@ -185,11 +185,14 @@
       own project subfolder) differs from WindowsApp.Compute's own
       default $(OutDir). This bit an actual unpackaged-exe run (missing
       export at load time from a stale copy of the DLL) before the
-      CopyComputeDllToOutput target below was added. turbojpeg.dll
-      doesn't have this problem - vcpkg's manifest-mode MSBuild
-      integration app-locally deploys its own dependency DLLs on its own.
-      WindowsApp.Vulkan is a static lib, so it doesn't have this problem
-      either - its code links straight into WindowsApp.exe.
+      CopyComputeDllToOutput target below was added. WindowsApp.Vulkan is
+      a static lib, so it doesn't have this problem either - its code
+      links straight into WindowsApp.exe. turbojpeg.dll was assumed here
+      to app-locally deploy on its own via vcpkg's manifest-mode MSBuild
+      integration - CONFIRMED WRONG 2026-07-22 (the first time anyone
+      actually launched the unpackaged exe interactively in this
+      project's history): it does not get copied either, failing with
+      STATUS_DLL_NOT_FOUND at launch. See CopyVcpkgDllsToOutput below.
     -->
     <ProjectReference Include="..\..\WindowsApp.Core\WindowsApp.Core.vcxproj">
       <Project>{d6b1d440-6228-4444-a1a1-9a9eb2d12b11}</Project>
@@ -266,5 +269,20 @@
   -->
   <Target Name="CopyComputeDllToOutput" AfterTargets="AfterBuild" Condition="Exists('$(SolutionDir)$(Platform)\$(Configuration)\WindowsApp.Compute.dll')">
     <Copy SourceFiles="$(SolutionDir)$(Platform)\$(Configuration)\WindowsApp.Compute.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="false" />
+  </Target>
+  <!--
+    turbojpeg.dll (JpegCodec's vcpkg dependency, pulled in transitively
+    via WindowsApp.Core.lib) - see the ProjectReference comment above:
+    vcpkg's manifest-mode AppLocal deployment was assumed to handle this
+    automatically but does NOT, confirmed 2026-07-22 by actually
+    launching the unpackaged exe (STATUS_DLL_NOT_FOUND). Same fix shape
+    as CopyComputeDllToOutput - vcpkg's own per-configuration bin dir.
+  -->
+  <PropertyGroup>
+    <VcpkgRuntimeBinDir Condition="'$(Configuration)'=='Debug'">$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\debug\bin\</VcpkgRuntimeBinDir>
+    <VcpkgRuntimeBinDir Condition="'$(Configuration)'!='Debug'">$(SolutionDir)vcpkg_installed\x64-windows\x64-windows\bin\</VcpkgRuntimeBinDir>
+  </PropertyGroup>
+  <Target Name="CopyVcpkgDllsToOutput" AfterTargets="AfterBuild" Condition="Exists('$(VcpkgRuntimeBinDir)turbojpeg.dll')">
+    <Copy SourceFiles="$(VcpkgRuntimeBinDir)turbojpeg.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="false" />
   </Target>
 </Project>
