@@ -55,7 +55,7 @@ namespace WindowsApp::Core
     // IsJpegFile or IsStandardImageFile recognizes - stb_image's info
     // reader covers JPEG too, so this is the one dimension-probe both
     // branches of RawIngestExecutor's non-RAW path share (see
-    // MainWindow::StitchStartButton_Click's picking loop).
+    // MainWindow::RunStartButton_Click's picking loop).
     bool GetStandardImageDimensions(const std::wstring& path, int& outWidth, int& outHeight);
 
     // Decodes a non-RAW, non-JPEG standard image format (PNG/BMP/GIF/TGA/

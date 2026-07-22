@@ -20,7 +20,7 @@ namespace WindowsApp::Core
         // a COMPLETED STAGE3_RENDER task's outputBlobId is ready to read
         // and blit immediately, which is what lets a caller show each
         // rendered chunk as it lands instead of only the final assembled
-        // result. Runs on whatever thread called Run() (see StitchStartButton_Click),
+        // result. Runs on whatever thread called Run() (see RunStartButton_Click),
         // never the UI thread directly - callers touching UI state must
         // dispatch back themselves, same as ProgressCallback/LogCallback.
         using TaskCallback = std::function<void(PipelineStage stage, const Task& task)>;

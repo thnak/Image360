@@ -19,9 +19,17 @@
                 BorderThickness="0,0,0,1"
                 Padding="24,18">
             <StackPanel Spacing="2">
-                <TextBlock Text="Panorama Stitcher"
+                <!-- Text set dynamically from code-behind (see
+                     MainWindow::UpdateFeatureChrome) so it reflects
+                     whichever feature FeatureComboBox has selected,
+                     instead of a hardcoded "Panorama Stitcher" title that
+                     would mislead once MFNR/HDR+/Night Sight/Super Res
+                     Zoom are also reachable from this window. -->
+                <TextBlock x:Name="HeaderTitleText"
+                           Text="Panorama Stitcher"
                            Style="{StaticResource TitleTextBlockStyle}" />
-                <TextBlock Text="Pick a set of overlapping RAW photos and stitch them into one panorama."
+                <TextBlock x:Name="HeaderSubtitleText"
+                           Text="Pick a set of overlapping RAW photos and stitch them into one panorama."
                            Style="{StaticResource BodyTextBlockStyle}"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            TextWrapping="WrapWholeWords" />
@@ -53,13 +61,17 @@
                             VerticalAlignment="Stretch">
                         <Grid>
                             <Rectangle Fill="{ThemeResource LayerFillColorDefaultBrush}" />
-                            <!-- Shows the panorama canvas as it's built: each
-                                 render chunk is blitted into this bitmap in
-                                 place as its task completes (see
-                                 MainWindow::OnRenderTaskCompleted), so the
-                                 picture fills in progressively instead of
-                                 only appearing once the whole stitch is
-                                 done. -->
+                            <!-- Shows the result as it's built. Stitch:
+                                 each render chunk is blitted into this
+                                 bitmap in place as its task completes
+                                 (see MainWindow::OnRenderTaskCompleted),
+                                 so the picture fills in progressively.
+                                 Burst modes (MFNR/HDR+/Night Sight/Super
+                                 Res Zoom): no chunk grid, no known output
+                                 size until BURST_MERGE runs, so this stays
+                                 empty until BURST_FINISH completes, then
+                                 the whole result is blitted in one shot
+                                 (see MainWindow::ShowFinalBurstResult). -->
                             <Image x:Name="RenderPreviewImage"
                                    Stretch="Uniform"
                                    HorizontalAlignment="Stretch"
@@ -72,11 +84,11 @@
                                 <FontIcon Glyph="&#xE91B;"
                                           FontSize="44"
                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                                <TextBlock Text="No stitch yet"
+                                <TextBlock Text="No result yet"
                                            Style="{StaticResource SubtitleTextBlockStyle}"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                            HorizontalAlignment="Center" />
-                                <TextBlock Text="Use Start Stitch to pick RAW photos (RAF, CR2, NEF, ARW, DNG)."
+                                <TextBlock Text="Pick a feature, then use Start to choose photos (a single overlapping set for Stitch, a burst of frames for the others)."
                                            Style="{StaticResource CaptionTextBlockStyle}"
                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                            TextWrapping="WrapWholeWords"
@@ -95,8 +107,20 @@
                     Padding="18"
                     VerticalAlignment="Top">
                 <StackPanel Spacing="12">
-                    <TextBlock Text="Panorama Stitch"
+                    <TextBlock x:Name="FeatureCardTitle"
+                               Text="Panorama Stitch"
                                Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <ComboBox x:Name="FeatureComboBox"
+                              Header="Feature"
+                              SelectedIndex="0"
+                              HorizontalAlignment="Stretch"
+                              SelectionChanged="FeatureComboBox_SelectionChanged">
+                        <ComboBoxItem Content="Panorama Stitch" />
+                        <ComboBoxItem Content="MFNR (noise reduction)" />
+                        <ComboBoxItem Content="HDR+" />
+                        <ComboBoxItem Content="Night Sight" />
+                        <ComboBoxItem Content="Super Res Zoom" />
+                    </ComboBox>
                     <ComboBox x:Name="ComputeBackendComboBox"
                               Header="Compute backend"
                               SelectedIndex="0"
@@ -107,12 +131,12 @@
                         <ComboBoxItem Content="Vulkan" />
                         <ComboBoxItem Content="CPU" />
                     </ComboBox>
-                    <TextBlock x:Name="StitchStatusText"
-                               Text="No stitch running."
+                    <TextBlock x:Name="RunStatusText"
+                               Text="No run in progress."
                                Style="{StaticResource BodyTextBlockStyle}"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                TextWrapping="WrapWholeWords" />
-                    <ProgressBar x:Name="StitchProgressBar"
+                    <ProgressBar x:Name="RunProgressBar"
                                  Minimum="0"
                                  Maximum="100"
                                  Value="0" />
@@ -121,22 +145,22 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Button x:Name="StitchStartButton"
-                                Content="Start Stitch"
-                                Click="StitchStartButton_Click"
+                        <Button x:Name="RunStartButton"
+                                Content="Start"
+                                Click="RunStartButton_Click"
                                 Style="{StaticResource AccentButtonStyle}"
                                 HorizontalAlignment="Stretch" />
-                        <Button x:Name="StitchCancelButton"
+                        <Button x:Name="RunCancelButton"
                                 Grid.Column="1"
                                 Content="Cancel"
                                 IsEnabled="False"
-                                Click="StitchCancelButton_Click"
+                                Click="RunCancelButton_Click"
                                 HorizontalAlignment="Stretch" />
                     </Grid>
-                    <Button x:Name="StitchExportButton"
-                            Content="Export Preview JPEG"
+                    <Button x:Name="ExportButton"
+                            Content="Export Result"
                             IsEnabled="False"
-                            Click="StitchExportButton_Click"
+                            Click="ExportButton_Click"
                             HorizontalAlignment="Stretch" />
                 </StackPanel>
             </Border>

@@ -90,7 +90,7 @@ int main()
     fs::create_directories(tempDir, ec);
     Check(!ec, "create temp project directory");
 
-    // Coarse canvas estimate, matching MainWindow::StitchStartButton_Click's
+    // Coarse canvas estimate, matching MainWindow::RunStartButton_Click's
     // own pre-alignment formula - real photos have no known tile geometry
     // to size the canvas from precisely.
     int maxWidth = 0, maxHeight = 0;

@@ -7,10 +7,17 @@
 #include "ImageLoader.h"
 #include "PanoramaExporter.h"
 #include "ComputeBackendFactory.h"
+#include "CpuComputeBackend.h"
+#include "JpegCodec.h"
+#include "BurstAlignExecutor.h"
+#include "BurstMergeExecutor.h"
+#include "Tiff16Writer.h"
+#include "PlatformFile.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <ctime>
+#include <cwctype>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -37,24 +44,32 @@ namespace
         case PipelineStage::STAGE1_ALIGN:    return L"Aligning images...";
         case PipelineStage::STAGE2_OPTIMIZE: return L"Optimizing exposure & geometry...";
         case PipelineStage::STAGE3_RENDER:   return L"Rendering panorama...";
-        case PipelineStage::COMPLETED:       return L"Stitch completed.";
-        case PipelineStage::CANCELLED:       return L"Stitch cancelled.";
-        case PipelineStage::FAILED:          return L"Stitch failed.";
+        case PipelineStage::BURST_ALIGN:     return L"Aligning burst frames...";
+        case PipelineStage::BURST_MERGE:     return L"Merging burst frames...";
+        case PipelineStage::BURST_FINISH:    return L"Finishing...";
+        case PipelineStage::COMPLETED:       return L"Run completed.";
+        case PipelineStage::CANCELLED:       return L"Run cancelled.";
+        case PipelineStage::FAILED:          return L"Run failed.";
         }
-        return L"Stitching...";
+        return L"Running...";
     }
 
     // ApplicationData::Current() throws ("The process has no package
     // identity") unless the app is running with MSIX package identity -
     // i.e. launched via the WindowsApp (Package) project, not the bare
     // WindowsApp.exe. Fall back to %LOCALAPPDATA%\Image360 so the demo
-    // stitch works either way instead of crashing when run unpackaged.
-    std::wstring StitchProjectPath()
+    // run works either way instead of crashing when run unpackaged. One
+    // project file reused/overwritten per run regardless of which
+    // feature is selected - it's scratch state, not something a user
+    // needs to keep across runs (docs/superpowers/plans/
+    // 2026-07-22-winui-feature-management.md scope decision 4's renamed
+    // "Stitch*" -> feature-neutral naming applies here too).
+    std::wstring RunProjectPath()
     {
         try
         {
             winrt::hstring localFolder = ApplicationData::Current().LocalFolder().Path();
-            return std::wstring(localFolder.c_str()) + L"\\demo_stitch.vfp";
+            return std::wstring(localFolder.c_str()) + L"\\demo_run.vfp";
         }
         catch (hresult_error const&)
         {
@@ -63,15 +78,15 @@ namespace
             std::wstring folder = (len > 0 && len < MAX_PATH) ? std::wstring(buffer) : L".";
             folder += L"\\Image360";
             CreateDirectoryW(folder.c_str(), nullptr);
-            return folder + L"\\demo_stitch.vfp";
+            return folder + L"\\demo_run.vfp";
         }
     }
 
     // Same file/format App::App()'s UnhandledException handler writes to -
     // one place to check regardless of whether a run failed gracefully
     // (this) or crashed outright (that). Pipeline log lines only ever
-    // reach the UI as a transient StitchStatusText string that the
-    // completion handler immediately overwrites with "Stitch failed.", so
+    // reach the UI as a transient RunStatusText string that the
+    // completion handler immediately overwrites with "Run failed.", so
     // without this the reason is gone by the time the user can read it.
     void AppendToStitchLog(const std::wstring& message)
     {
@@ -92,6 +107,58 @@ namespace
         }
         logFile << L"[" << timeString << L"] " << message << std::endl;
     }
+
+    using ::winrt::WindowsApp::implementation::AppFeature;
+
+    bool IsBurstFeature(AppFeature feature)
+    {
+        return feature != AppFeature::Stitch;
+    }
+
+    ::WindowsApp::Core::BurstMode ToBurstMode(AppFeature feature)
+    {
+        using ::WindowsApp::Core::BurstMode;
+        switch (feature)
+        {
+        case AppFeature::Mfnr:       return BurstMode::MFNR;
+        case AppFeature::HdrPlus:    return BurstMode::HDR_PLUS;
+        case AppFeature::NightSight: return BurstMode::NIGHT_SIGHT;
+        case AppFeature::SuperRes:   return BurstMode::SUPER_RES;
+        default:                     return BurstMode::NONE; // unreachable for Stitch callers
+        }
+    }
+
+    struct FeatureChrome
+    {
+        const wchar_t* headerTitle;
+        const wchar_t* headerSubtitle;
+        const wchar_t* cardTitle;
+        const wchar_t* startLabel;
+    };
+
+    // Text shown for whichever feature FeatureComboBox has selected -
+    // see MainWindow::FeatureComboBox_SelectionChanged.
+    FeatureChrome ChromeFor(AppFeature feature)
+    {
+        switch (feature)
+        {
+        case AppFeature::Mfnr:
+            return { L"MFNR", L"Pick a burst of frames from the same scene to denoise via multi-frame merge.",
+                     L"MFNR (Noise Reduction)", L"Start MFNR" };
+        case AppFeature::HdrPlus:
+            return { L"HDR+", L"Pick a burst of frames from the same scene to merge into one high-dynamic-range image.",
+                     L"HDR+", L"Start HDR+" };
+        case AppFeature::NightSight:
+            return { L"Night Sight", L"Pick a handheld low-light burst to denoise and tone-map.",
+                     L"Night Sight", L"Start Night Sight" };
+        case AppFeature::SuperRes:
+            return { L"Super Res Zoom", L"Pick a burst of frames to reconstruct a higher-resolution image from sub-pixel detail.",
+                     L"Super Res Zoom", L"Start Super Res Zoom" };
+        default:
+            return { L"Panorama Stitcher", L"Pick a set of overlapping RAW photos and stitch them into one panorama.",
+                     L"Panorama Stitch", L"Start Stitch" };
+        }
+    }
 }
 
 namespace winrt::WindowsApp::implementation
@@ -106,7 +173,33 @@ namespace winrt::WindowsApp::implementation
         throw hresult_not_implemented();
     }
 
-    winrt::fire_and_forget MainWindow::StitchStartButton_Click(
+    void MainWindow::FeatureComboBox_SelectionChanged(
+        Windows::Foundation::IInspectable const& /* sender */,
+        Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& /* args */)
+    {
+        switch (FeatureComboBox().SelectedIndex())
+        {
+        case 1: m_selectedFeature = AppFeature::Mfnr; break;
+        case 2: m_selectedFeature = AppFeature::HdrPlus; break;
+        case 3: m_selectedFeature = AppFeature::NightSight; break;
+        case 4: m_selectedFeature = AppFeature::SuperRes; break;
+        default: m_selectedFeature = AppFeature::Stitch; break;
+        }
+
+        FeatureChrome chrome = ChromeFor(m_selectedFeature);
+        HeaderTitleText().Text(chrome.headerTitle);
+        HeaderSubtitleText().Text(chrome.headerSubtitle);
+        FeatureCardTitle().Text(chrome.cardTitle);
+        RunStartButton().Content(winrt::box_value(winrt::hstring{ chrome.startLabel }));
+
+        // Whether the cached compute backend needs to be re-selected is
+        // decided in RunStartButton_Click by comparing
+        // m_lastBackendForcedForBurst against the newly selected
+        // feature's own requirement (burst modes always force CPU - see
+        // the plan doc's scope decision 1) - no invalidation needed here.
+    }
+
+    winrt::fire_and_forget MainWindow::RunStartButton_Click(
         Windows::Foundation::IInspectable const& /* sender */,
         RoutedEventArgs const& /* args */)
     {
@@ -116,46 +209,73 @@ namespace winrt::WindowsApp::implementation
         using ::WindowsApp::Core::PipelineStage;
         using ::WindowsApp::Core::RawPlane;
         using ::WindowsApp::Core::Task;
+        using ::WindowsApp::Core::TaskStatus;
 
         auto lifetime{ get_strong() }; // keep `this` alive across co_await suspension
 
-        StitchStartButton().IsEnabled(false);
-        StitchCancelButton().IsEnabled(true);
-        StitchStatusText().Text(L"Pick RAW photos to stitch...");
-        StitchProgressBar().Value(0);
-        m_lastStitchLogMessage.clear();
+        bool isBurst = IsBurstFeature(m_selectedFeature);
 
-        // A re-run (Start Stitch clicked again after a previous run) must
-        // not keep showing the previous stitch's finished canvas while
-        // photos are (re-)picked - back to the empty state until the new
-        // project's canvas is created below.
+        RunStartButton().IsEnabled(false);
+        RunCancelButton().IsEnabled(true);
+        RunStatusText().Text(L"Pick photos to process...");
+        RunProgressBar().Value(0);
+        m_lastLogMessage.clear();
+
+        // A re-run (Start clicked again after a previous run) must not
+        // keep showing the previous run's finished canvas while photos
+        // are (re-)picked - back to the empty state until a new result
+        // exists.
         EmptyStatePanel().Visibility(Visibility::Visible);
         RenderPreviewImage().Source(nullptr);
         m_renderCanvas = nullptr;
 
-        // A previous run has already finished (Start is disabled while one
-        // is active), but std::jthread stays joinable until explicitly
-        // joined - clear it out before starting a fresh one.
-        if (m_stitchThread.joinable())
+        // A previous run has already finished (Start is disabled while
+        // one is active), but std::jthread stays joinable until
+        // explicitly joined - clear it out before starting a fresh one.
+        if (m_runThread.joinable())
         {
-            m_stitchThread.join();
+            m_runThread.join();
         }
 
-        // Lazily initialize the engine objects once per session (not per
-        // run) - avoids paying CUDA init cost if the user never clicks
-        // Start Stitch. SelectComputeBackend() tries CudaPipeline first and
-        // falls back to CpuComputeBackend (AVX-512/AVX2/scalar) if no
-        // compatible GPU is found, so a missing/incompatible GPU no longer
-        // aborts the run - only a genuinely broken environment (e.g. the
-        // CPU JPEG codec failing to initialize, extremely rare) would.
-        if (!m_computeInitialized)
+        // Lazily (re-)initialize the engine objects. Burst modes always
+        // force CPU (BlockMatchAlign/RobustMergeAccumulate/TileFftMerge/
+        // StructureTensorKernelRegression have no Vulkan/CUDA
+        // implementation yet - see the plan doc's scope decision 1);
+        // Stitch keeps SelectComputeBackend()'s existing Auto/CUDA/
+        // Vulkan/CPU behavior. Re-selects whenever the cached backend's
+        // forced-CPU-or-not policy doesn't match what the newly selected
+        // feature needs, not just once per session, so switching between
+        // Stitch and a burst mode (or back) always picks correctly.
+        if (!m_computeInitialized || m_lastBackendForcedForBurst != isBurst)
         {
-            auto selection = ::WindowsApp::SelectComputeBackend(m_computeBackendPreference);
-            m_cudaPipeline = selection.backend;
-            m_nvJpegCodec = selection.codec;
-            m_computeMaxInFlight = selection.recommendedMaxInFlight;
-            AppendToStitchLog(selection.statusMessage);
+            if (isBurst)
+            {
+                auto cpu = std::make_shared<::WindowsApp::Core::CpuComputeBackend>();
+                cpu->Initialize(); // cannot fail - always some SIMD tier available
+                auto cpuJpeg = std::make_shared<::WindowsApp::Core::JpegCodec>();
+                cpuJpeg->Initialize();
 
+                auto cpuInfo = cpu->GetGpuInfo();
+                std::wstring cpuName(cpuInfo.name, cpuInfo.name + strlen(cpuInfo.name));
+
+                m_cudaPipeline = cpu;
+                m_nvJpegCodec = cpuJpeg;
+                m_computeMaxInFlight = (std::max)(size_t(1),
+                    static_cast<size_t>(std::thread::hardware_concurrency()) - 1);
+                AppendToStitchLog(
+                    L"Burst modes run on CPU only (no Vulkan/CUDA implementation yet for "
+                    L"BlockMatchAlign and friends) - using " + cpuName);
+            }
+            else
+            {
+                auto selection = ::WindowsApp::SelectComputeBackend(m_computeBackendPreference);
+                m_cudaPipeline = selection.backend;
+                m_nvJpegCodec = selection.codec;
+                m_computeMaxInFlight = selection.recommendedMaxInFlight;
+                AppendToStitchLog(selection.statusMessage);
+            }
+
+            m_lastBackendForcedForBurst = isBurst;
             m_computeInitialized = true;
         }
 
@@ -180,13 +300,21 @@ namespace winrt::WindowsApp::implementation
         auto pickedFiles{ co_await picker.PickMultipleFilesAsync() };
         if (!pickedFiles || pickedFiles.Size() == 0)
         {
-            StitchStartButton().IsEnabled(true);
-            StitchCancelButton().IsEnabled(false);
-            StitchStatusText().Text(L"No photos selected.");
+            RunStartButton().IsEnabled(true);
+            RunCancelButton().IsEnabled(false);
+            RunStatusText().Text(L"No photos selected.");
             co_return;
         }
 
-        StitchStatusText().Text(L"Reading photo metadata...");
+        if (isBurst && pickedFiles.Size() < 2)
+        {
+            RunStartButton().IsEnabled(true);
+            RunCancelButton().IsEnabled(false);
+            RunStatusText().Text(L"Burst modes need at least 2 frames.");
+            co_return;
+        }
+
+        RunStatusText().Text(L"Reading photo metadata...");
 
         // Per-file LibRaw metadata/unpack reads run synchronously here on
         // whatever thread resumes this coroutine (typically the UI
@@ -251,75 +379,88 @@ namespace winrt::WindowsApp::implementation
             pickedImages.push_back({ path, cfaType, width, height });
         }
 
-        if (pickedImages.empty())
+        if (pickedImages.empty() || (isBurst && pickedImages.size() < 2))
         {
-            StitchStartButton().IsEnabled(true);
-            StitchCancelButton().IsEnabled(false);
-            StitchStatusText().Text(L"Could not read any of the selected photos.");
+            RunStartButton().IsEnabled(true);
+            RunCancelButton().IsEnabled(false);
+            RunStatusText().Text(L"Could not read enough of the selected photos.");
             co_return;
         }
 
-        int maxWidth = 0;
-        int maxHeight = 0;
-        for (const auto& img : pickedImages)
-        {
-            maxWidth = (std::max)(maxWidth, img.width);
-            maxHeight = (std::max)(maxHeight, img.height);
-        }
+        std::wstring projectPath = RunProjectPath();
 
-        // Coarse pre-alignment canvas estimate, refined once real
-        // homographies exist (Align/Optimize) - not the final extent.
-        int totalWidth = maxWidth * static_cast<int>(pickedImages.size());
-        int totalHeight = maxHeight * static_cast<int>(pickedImages.size());
-
-        std::wstring projectPath = StitchProjectPath();
-
-        m_stitchProject.CloseProject(); // release any handle from a prior click before deleting the file
-        m_stitchStorage.Close();
+        m_project.CloseProject(); // release any handle from a prior click before deleting the file
+        m_storage.Close();
         DeleteFileW(projectPath.c_str());
         DeleteFileW((projectPath + L"-wal").c_str());
         DeleteFileW((projectPath + L"-shm").c_str());
-        m_stitchProject.CreateProject(projectPath, totalWidth, totalHeight);
 
-        // Blank (fully transparent) canvas at the project's full extent -
-        // each Render chunk fills in its own sub-rectangle as its task
-        // completes (see the onTaskCompleted callback passed to
-        // m_pipelineDriver.Initialize below), so the still-transparent
-        // regions show the placeholder background through until their
-        // chunk lands instead of the whole picture popping in at once.
-        //
-        // totalWidth/totalHeight is a coarse pre-alignment OVER-estimate
-        // (maxWidth/maxHeight * image count, sized for the worst case
-        // before real geometry is known) - fine as inert project/chunk-
-        // grid bookkeeping, but allocating a WriteableBitmap at that size
-        // verbatim is a real crash for real photos (3 x 3000x4000 phone
-        // photos -> a 9000x12000 canvas, ~412MB, allocated synchronously
-        // on the UI thread with no room to fail gracefully). Cap the
-        // *preview* canvas to a sane display size and have
-        // BlitRenderedChunk downsample into it instead.
-        constexpr int kMaxPreviewDimension = 2048;
-        int longestSide = (std::max)(totalWidth, totalHeight);
-        m_renderPreviewScale = (longestSide > kMaxPreviewDimension)
-            ? static_cast<double>(kMaxPreviewDimension) / static_cast<double>(longestSide)
-            : 1.0;
-        int previewWidth = (std::max)(1, static_cast<int>(totalWidth * m_renderPreviewScale));
-        int previewHeight = (std::max)(1, static_cast<int>(totalHeight * m_renderPreviewScale));
-
-        try
+        if (isBurst)
         {
-            m_renderCanvas = WriteableBitmap(previewWidth, previewHeight);
-            RenderPreviewImage().Source(m_renderCanvas);
-            EmptyStatePanel().Visibility(Visibility::Collapsed);
+            m_project.CreateBurstProject(projectPath, ToBurstMode(m_selectedFeature));
+            // No pre-sized preview canvas - a burst project has no chunk
+            // grid and no known output size until BURST_MERGE actually
+            // runs (Super Res Zoom upsamples); ShowFinalBurstResult
+            // creates m_renderCanvas once BURST_FINISH's real output
+            // dimensions are known (see the plan doc's scope decision 2).
         }
-        catch (hresult_error const& error)
+        else
         {
-            // The live preview is a nice-to-have, not load-bearing - if
-            // the canvas still can't be allocated for some other reason,
-            // disable it (BlitRenderedChunk no-ops on a null
-            // m_renderCanvas) rather than taking the whole app down; the
-            // stitch itself doesn't depend on this.
-            m_renderCanvas = nullptr;
-            AppendToStitchLog(L"Render preview disabled: " + std::wstring(error.message().c_str()));
+            int maxWidth = 0;
+            int maxHeight = 0;
+            for (const auto& img : pickedImages)
+            {
+                maxWidth = (std::max)(maxWidth, img.width);
+                maxHeight = (std::max)(maxHeight, img.height);
+            }
+
+            // Coarse pre-alignment canvas estimate, refined once real
+            // homographies exist (Align/Optimize) - not the final extent.
+            int totalWidth = maxWidth * static_cast<int>(pickedImages.size());
+            int totalHeight = maxHeight * static_cast<int>(pickedImages.size());
+
+            m_project.CreateProject(projectPath, totalWidth, totalHeight);
+
+            // Blank (fully transparent) canvas at the project's full extent -
+            // each Render chunk fills in its own sub-rectangle as its task
+            // completes (see the onTaskCompleted callback passed to
+            // m_pipelineDriver.Initialize below), so the still-transparent
+            // regions show the placeholder background through until their
+            // chunk lands instead of the whole picture popping in at once.
+            //
+            // totalWidth/totalHeight is a coarse pre-alignment OVER-estimate
+            // (maxWidth/maxHeight * image count, sized for the worst case
+            // before real geometry is known) - fine as inert project/chunk-
+            // grid bookkeeping, but allocating a WriteableBitmap at that size
+            // verbatim is a real crash for real photos (3 x 3000x4000 phone
+            // photos -> a 9000x12000 canvas, ~412MB, allocated synchronously
+            // on the UI thread with no room to fail gracefully). Cap the
+            // *preview* canvas to a sane display size and have
+            // BlitRenderedChunk downsample into it instead.
+            constexpr int kMaxPreviewDimension = 2048;
+            int longestSide = (std::max)(totalWidth, totalHeight);
+            m_renderPreviewScale = (longestSide > kMaxPreviewDimension)
+                ? static_cast<double>(kMaxPreviewDimension) / static_cast<double>(longestSide)
+                : 1.0;
+            int previewWidth = (std::max)(1, static_cast<int>(totalWidth * m_renderPreviewScale));
+            int previewHeight = (std::max)(1, static_cast<int>(totalHeight * m_renderPreviewScale));
+
+            try
+            {
+                m_renderCanvas = WriteableBitmap(previewWidth, previewHeight);
+                RenderPreviewImage().Source(m_renderCanvas);
+                EmptyStatePanel().Visibility(Visibility::Collapsed);
+            }
+            catch (hresult_error const& error)
+            {
+                // The live preview is a nice-to-have, not load-bearing - if
+                // the canvas still can't be allocated for some other reason,
+                // disable it (BlitRenderedChunk no-ops on a null
+                // m_renderCanvas) rather than taking the whole app down; the
+                // stitch itself doesn't depend on this.
+                m_renderCanvas = nullptr;
+                AppendToStitchLog(L"Render preview disabled: " + std::wstring(error.message().c_str()));
+            }
         }
 
         {
@@ -330,40 +471,54 @@ namespace winrt::WindowsApp::implementation
             size_t nameLength = (lastDot == std::wstring::npos || lastDot < nameStart) ? std::wstring::npos : lastDot - nameStart;
             std::wstring projectBaseName = projectPath.substr(nameStart, nameLength);
 
-            m_stitchStorage.Open(projectDirectory, projectBaseName, m_stitchProject);
+            m_storage.Open(projectDirectory, projectBaseName, m_project);
         }
 
         for (const auto& img : pickedImages)
         {
-            m_stitchProject.AddInputImage(img.path, Homography{}, img.cfaType);
+            m_project.AddInputImage(img.path, Homography{}, img.cfaType);
         }
 
-        m_stitchProject.SeedIngestTasks();
-        m_stitchProject.SeedAlignTasks();
-        m_stitchProject.SeedOptimizeTasks();
-        // STAGE3_RENDER is deliberately not seeded here - it needs
-        // Optimize's final homographies; PipelineDriver::Run seeds it
-        // right before the Render stage (issue #42).
+        if (isBurst)
+        {
+            m_project.SeedBurstAlignTasks();
+            m_project.SeedBurstMergeTasks();
 
-        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE0_INGEST,
-            std::make_shared<::WindowsApp::Core::RawIngestExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline, m_nvJpegCodec));
-        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE1_ALIGN,
-            std::make_shared<::WindowsApp::Core::AlignExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline, m_nvJpegCodec));
-        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE2_OPTIMIZE,
-            std::make_shared<::WindowsApp::Core::OptimizeExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline, m_nvJpegCodec));
-        m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE3_RENDER,
-            std::make_shared<::WindowsApp::Core::RenderExecutor>(m_stitchProject, m_stitchStorage, m_cudaPipeline));
+            m_pipelineDriver.RegisterExecutor(PipelineStage::BURST_ALIGN,
+                std::make_shared<::WindowsApp::Core::BurstAlignExecutor>(m_project, m_storage, m_cudaPipeline, m_nvJpegCodec));
+            auto mergeExecutor = std::make_shared<::WindowsApp::Core::BurstMergeExecutor>(m_project, m_storage, m_cudaPipeline);
+            m_pipelineDriver.RegisterExecutor(PipelineStage::BURST_MERGE, mergeExecutor);
+            m_pipelineDriver.RegisterExecutor(PipelineStage::BURST_FINISH, mergeExecutor);
+        }
+        else
+        {
+            m_project.SeedIngestTasks();
+            m_project.SeedAlignTasks();
+            m_project.SeedOptimizeTasks();
+            // STAGE3_RENDER is deliberately not seeded here - it needs
+            // Optimize's final homographies; PipelineDriver::Run seeds it
+            // right before the Render stage (issue #42).
 
-        StitchStatusText().Text(L"Starting stitch...");
+            m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE0_INGEST,
+                std::make_shared<::WindowsApp::Core::RawIngestExecutor>(m_project, m_storage, m_cudaPipeline, m_nvJpegCodec));
+            m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE1_ALIGN,
+                std::make_shared<::WindowsApp::Core::AlignExecutor>(m_project, m_storage, m_cudaPipeline, m_nvJpegCodec));
+            m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE2_OPTIMIZE,
+                std::make_shared<::WindowsApp::Core::OptimizeExecutor>(m_project, m_storage, m_cudaPipeline, m_nvJpegCodec));
+            m_pipelineDriver.RegisterExecutor(PipelineStage::STAGE3_RENDER,
+                std::make_shared<::WindowsApp::Core::RenderExecutor>(m_project, m_storage, m_cudaPipeline));
+        }
 
-        m_stitchStopSource = std::stop_source();
-        auto token = m_stitchStopSource.get_token();
+        RunStatusText().Text(L"Starting...");
+
+        m_runStopSource = std::stop_source();
+        auto token = m_runStopSource.get_token();
         auto dispatcher = DispatcherQueue();
 
         // weak_ref, not `this`, in every dispatcher-posted closure below:
         // TryEnqueue only *queues* work, it doesn't wait for it to run, so
         // a closure posted right before the background thread function
-        // returns can still be sitting in the queue after m_stitchThread's
+        // returns can still be sitting in the queue after m_runThread's
         // destructor (join) has unblocked ~MainWindow() and later members
         // start tearing down. Capturing `this`/members directly is safe
         // everywhere else in this method (and inside Run itself) because
@@ -378,8 +533,8 @@ namespace winrt::WindowsApp::implementation
                 {
                     if (auto strongThis{ weakThis.get() })
                     {
-                        strongThis->StitchStatusText().Text(StageToDisplayString(stage));
-                        strongThis->StitchProgressBar().Value(progress * 100.0);
+                        strongThis->RunStatusText().Text(StageToDisplayString(stage));
+                        strongThis->RunProgressBar().Value(progress * 100.0);
                     }
                 });
             },
@@ -390,59 +545,73 @@ namespace winrt::WindowsApp::implementation
                 {
                     if (auto strongThis{ weakThis.get() })
                     {
-                        strongThis->m_lastStitchLogMessage = message;
-                        strongThis->StitchStatusText().Text(winrt::hstring{ message });
+                        strongThis->m_lastLogMessage = message;
+                        strongThis->RunStatusText().Text(winrt::hstring{ message });
                     }
                 });
             },
             m_computeMaxInFlight,
             [weakThis, dispatcher](::WindowsApp::Core::PipelineStage stage, ::WindowsApp::Core::Task const& task)
             {
-                // Runs on m_stitchThread (see PipelineDriver::TaskCallback's
-                // doc comment) - only Render chunks have anything worth
-                // showing (Ingest/Align/Optimize tasks don't produce a
-                // displayable canvas region).
-                if (stage != ::WindowsApp::Core::PipelineStage::STAGE3_RENDER || !task.outputBlobId.has_value())
-                {
-                    return;
-                }
+                // Runs on m_runThread (see PipelineDriver::TaskCallback's
+                // doc comment) - only Render chunks (Stitch) and the
+                // BURST_FINISH task (burst modes) have anything worth
+                // showing.
+                if (!task.outputBlobId.has_value()) return;
 
                 auto strongThis{ weakThis.get() };
                 if (!strongThis) return;
 
-                auto pixels = strongThis->m_stitchStorage.ReadPixelBuffer(task.outputBlobId.value());
-                if (!pixels.has_value()) return;
-
-                int xOffset = 0, yOffset = 0;
-                bool foundChunk = false;
-                for (const auto& chunk : strongThis->m_stitchProject.GetChunks())
+                if (stage == ::WindowsApp::Core::PipelineStage::STAGE3_RENDER)
                 {
-                    if (chunk.id == task.unitKey)
+                    auto pixels = strongThis->m_storage.ReadPixelBuffer(task.outputBlobId.value());
+                    if (!pixels.has_value()) return;
+
+                    int xOffset = 0, yOffset = 0;
+                    bool foundChunk = false;
+                    for (const auto& chunk : strongThis->m_project.GetChunks())
                     {
-                        xOffset = chunk.x_offset;
-                        yOffset = chunk.y_offset;
-                        foundChunk = true;
-                        break;
+                        if (chunk.id == task.unitKey)
+                        {
+                            xOffset = chunk.x_offset;
+                            yOffset = chunk.y_offset;
+                            foundChunk = true;
+                            break;
+                        }
                     }
+                    if (!foundChunk) return;
+
+                    // Format conversion (RGB48 -> BGRA8) happens here, off the
+                    // UI thread, since it's the expensive part - only the
+                    // actual WriteableBitmap buffer write + Invalidate (cheap)
+                    // needs to run on the UI thread. Wrapped in a shared_ptr
+                    // so the DispatcherQueueHandler delegate stays copyable.
+                    auto pixelsPtr = std::make_shared<::WindowsApp::Core::PixelBuffer>(std::move(pixels.value()));
+                    dispatcher.TryEnqueue([weakThis, pixelsPtr, xOffset, yOffset]
+                    {
+                        if (auto strongThis2{ weakThis.get() })
+                        {
+                            strongThis2->BlitRenderedChunk(*pixelsPtr, xOffset, yOffset);
+                        }
+                    });
                 }
-                if (!foundChunk) return;
-
-                // Format conversion (RGB48 -> BGRA8) happens here, off the
-                // UI thread, since it's the expensive part - only the
-                // actual WriteableBitmap buffer write + Invalidate (cheap)
-                // needs to run on the UI thread. Wrapped in a shared_ptr
-                // so the DispatcherQueueHandler delegate stays copyable.
-                auto pixelsPtr = std::make_shared<::WindowsApp::Core::PixelBuffer>(std::move(pixels.value()));
-                dispatcher.TryEnqueue([weakThis, pixelsPtr, xOffset, yOffset]
+                else if (stage == ::WindowsApp::Core::PipelineStage::BURST_FINISH)
                 {
-                    if (auto strongThis2{ weakThis.get() })
+                    auto pixels = strongThis->m_storage.ReadPixelBuffer(task.outputBlobId.value());
+                    if (!pixels.has_value()) return;
+
+                    auto pixelsPtr = std::make_shared<::WindowsApp::Core::PixelBuffer>(std::move(pixels.value()));
+                    dispatcher.TryEnqueue([weakThis, pixelsPtr]
                     {
-                        strongThis2->BlitRenderedChunk(*pixelsPtr, xOffset, yOffset);
-                    }
-                });
+                        if (auto strongThis2{ weakThis.get() })
+                        {
+                            strongThis2->ShowFinalBurstResult(*pixelsPtr);
+                        }
+                    });
+                }
             });
 
-        m_stitchThread = std::jthread([this, weakThis, dispatcher, token]()
+        m_runThread = std::jthread([this, weakThis, dispatcher, token]()
         {
             bool ok = false;
             std::wstring crashMessage;
@@ -453,20 +622,20 @@ namespace winrt::WindowsApp::implementation
             // not even the crash-dialog/temp-log path other failures get.
             try
             {
-                ok = m_pipelineDriver.Run(m_stitchProject, token);
+                ok = m_pipelineDriver.Run(m_project, token);
             }
             catch (hresult_error const& error)
             {
-                crashMessage = L"Stitch thread threw: " + std::wstring(error.message().c_str());
+                crashMessage = L"Run thread threw: " + std::wstring(error.message().c_str());
             }
             catch (std::exception const& error)
             {
                 std::string narrow = error.what();
-                crashMessage = L"Stitch thread threw: " + std::wstring(narrow.begin(), narrow.end());
+                crashMessage = L"Run thread threw: " + std::wstring(narrow.begin(), narrow.end());
             }
             catch (...)
             {
-                crashMessage = L"Stitch thread threw an unrecognized exception.";
+                crashMessage = L"Run thread threw an unrecognized exception.";
             }
             if (!crashMessage.empty())
             {
@@ -478,45 +647,45 @@ namespace winrt::WindowsApp::implementation
             {
                 if (auto strongThis{ weakThis.get() })
                 {
-                    strongThis->StitchStartButton().IsEnabled(true);
-                    strongThis->StitchCancelButton().IsEnabled(false);
-                    strongThis->StitchExportButton().IsEnabled(ok);
+                    strongThis->RunStartButton().IsEnabled(true);
+                    strongThis->RunCancelButton().IsEnabled(false);
+                    strongThis->ExportButton().IsEnabled(ok);
 
                     if (!crashMessage.empty())
                     {
-                        strongThis->m_lastStitchLogMessage = crashMessage;
+                        strongThis->m_lastLogMessage = crashMessage;
                     }
 
                     winrt::hstring statusText;
                     if (ok)
                     {
-                        statusText = L"Stitch completed.";
+                        statusText = L"Run completed.";
                     }
                     else if (wasCancelled)
                     {
-                        statusText = L"Stitch cancelled.";
+                        statusText = L"Run cancelled.";
                     }
-                    else if (!strongThis->m_lastStitchLogMessage.empty())
+                    else if (!strongThis->m_lastLogMessage.empty())
                     {
-                        statusText = winrt::hstring{ L"Stitch failed: " } +
-                            winrt::hstring{ strongThis->m_lastStitchLogMessage };
+                        statusText = winrt::hstring{ L"Run failed: " } +
+                            winrt::hstring{ strongThis->m_lastLogMessage };
                     }
                     else
                     {
-                        statusText = L"Stitch failed. See %TEMP%\\WindowsApp.log for details.";
+                        statusText = L"Run failed. See %TEMP%\\WindowsApp.log for details.";
                     }
-                    strongThis->StitchStatusText().Text(statusText);
+                    strongThis->RunStatusText().Text(statusText);
 
                     if (ok)
                     {
-                        strongThis->StitchProgressBar().Value(100.0);
+                        strongThis->RunProgressBar().Value(100.0);
                     }
                 }
             });
         });
     }
 
-    void MainWindow::StitchCancelButton_Click(
+    void MainWindow::RunCancelButton_Click(
         Windows::Foundation::IInspectable const& /* sender */,
         RoutedEventArgs const& /* args */)
     {
@@ -524,8 +693,8 @@ namespace winrt::WindowsApp::implementation
         // thread. The background thread's own completion handler (already
         // dispatched back to the UI thread once Run actually returns)
         // re-enables Start.
-        m_stitchStopSource.request_stop();
-        StitchStatusText().Text(L"Cancelling - finishing in-flight work...");
+        m_runStopSource.request_stop();
+        RunStatusText().Text(L"Cancelling - finishing in-flight work...");
     }
 
     void MainWindow::BlitRenderedChunk(const ::WindowsApp::Core::PixelBuffer& pixels, int xOffset, int yOffset)
@@ -588,6 +757,37 @@ namespace winrt::WindowsApp::implementation
         m_renderCanvas.Invalidate();
     }
 
+    void MainWindow::ShowFinalBurstResult(const ::WindowsApp::Core::PixelBuffer& pixels)
+    {
+        // Same kMaxPreviewDimension downsample policy as Stitch's canvas
+        // pre-allocation (see RunStartButton_Click) - a Super Res Zoom
+        // result can be several thousand pixels per side, and a
+        // WriteableBitmap at that size verbatim risks the same real
+        // crash Stitch's own comment describes.
+        constexpr int kMaxPreviewDimension = 2048;
+        int longestSide = (std::max)(pixels.width, pixels.height);
+        m_renderPreviewScale = (longestSide > kMaxPreviewDimension)
+            ? static_cast<double>(kMaxPreviewDimension) / static_cast<double>(longestSide)
+            : 1.0;
+        int previewWidth = (std::max)(1, static_cast<int>(pixels.width * m_renderPreviewScale));
+        int previewHeight = (std::max)(1, static_cast<int>(pixels.height * m_renderPreviewScale));
+
+        try
+        {
+            m_renderCanvas = WriteableBitmap(previewWidth, previewHeight);
+            RenderPreviewImage().Source(m_renderCanvas);
+            EmptyStatePanel().Visibility(Visibility::Collapsed);
+        }
+        catch (hresult_error const& error)
+        {
+            m_renderCanvas = nullptr;
+            AppendToStitchLog(L"Result preview disabled: " + std::wstring(error.message().c_str()));
+            return;
+        }
+
+        BlitRenderedChunk(pixels, 0, 0);
+    }
+
     void MainWindow::ComputeBackendComboBox_SelectionChanged(
         Windows::Foundation::IInspectable const& /* sender */,
         Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& /* args */)
@@ -602,13 +802,14 @@ namespace winrt::WindowsApp::implementation
 
         // The already-initialized backend (if any) was picked under the
         // previous preference - force SelectComputeBackend() to run again
-        // with the new one on the next Start Stitch click instead of
-        // silently keeping whatever backend the first run happened to
-        // pick.
+        // with the new one on the next Run click instead of silently
+        // keeping whatever backend the first run happened to pick.
+        // Ignored for burst modes (forced CPU regardless - see
+        // RunStartButton_Click), but harmless to set unconditionally.
         m_computeInitialized = false;
     }
 
-    winrt::fire_and_forget MainWindow::StitchExportButton_Click(
+    winrt::fire_and_forget MainWindow::ExportButton_Click(
         Windows::Foundation::IInspectable const& /* sender */,
         RoutedEventArgs const& /* args */)
     {
@@ -619,39 +820,117 @@ namespace winrt::WindowsApp::implementation
             m_exportThread.join();
         }
 
+        bool isBurst = IsBurstFeature(m_selectedFeature);
+
         FileSavePicker picker{ AppWindow().Id() };
-        picker.SuggestedFileName(L"panorama_preview");
-        picker.FileTypeChoices().Insert(L"JPEG image", winrt::single_threaded_vector<winrt::hstring>({ L".jpg" }));
+        if (isBurst)
+        {
+            // TIFF (lossless, via Tiff16Writer - the same writer
+            // image360_cli's burst subcommands use) and JPEG (lossy, via
+            // the existing JpegCodec path) - PanoramaExporter's
+            // JPEG-only ExportPreviewJpeg doesn't apply here, burst
+            // output has no chunk grid to composite (plan doc scope
+            // decision 3).
+            picker.SuggestedFileName(L"result");
+            picker.FileTypeChoices().Insert(L"TIFF image (16-bit)", winrt::single_threaded_vector<winrt::hstring>({ L".tif" }));
+            picker.FileTypeChoices().Insert(L"JPEG image", winrt::single_threaded_vector<winrt::hstring>({ L".jpg" }));
+        }
+        else
+        {
+            picker.SuggestedFileName(L"panorama_preview");
+            picker.FileTypeChoices().Insert(L"JPEG image", winrt::single_threaded_vector<winrt::hstring>({ L".jpg" }));
+        }
 
         auto destFile{ co_await picker.PickSaveFileAsync() };
         if (!destFile)
         {
-            StitchStatusText().Text(L"Export cancelled.");
+            RunStatusText().Text(L"Export cancelled.");
             co_return;
         }
 
         std::wstring destPath(destFile.Path().c_str());
 
-        StitchExportButton().IsEnabled(false);
-        StitchStatusText().Text(L"Exporting preview JPEG...");
+        ExportButton().IsEnabled(false);
+        RunStatusText().Text(L"Exporting...");
 
-        auto weakThis{ get_weak() }; // same reasoning as StitchStartButton_Click - see that method's comment
+        auto weakThis{ get_weak() }; // same reasoning as RunStartButton_Click - see that method's comment
         auto dispatcher = DispatcherQueue();
 
-        m_exportThread = std::jthread([this, weakThis, dispatcher, destPath]()
+        if (isBurst)
         {
-            ::WindowsApp::Core::PanoramaExporter exporter(m_stitchProject, m_stitchStorage, m_nvJpegCodec);
-            bool ok = exporter.ExportPreviewJpeg(destPath, 4096);
-
-            dispatcher.TryEnqueue([weakThis, ok]
+            m_exportThread = std::jthread([this, weakThis, dispatcher, destPath]()
             {
-                if (auto strongThis{ weakThis.get() })
+                bool ok = false;
+
+                std::vector<::WindowsApp::Core::Task> finishTasks =
+                    m_project.GetTasksForStage(::WindowsApp::Core::PipelineStage::BURST_FINISH);
+                if (finishTasks.size() == 1 && finishTasks[0].status == ::WindowsApp::Core::TaskStatus::COMPLETED
+                    && finishTasks[0].outputBlobId.has_value())
                 {
-                    strongThis->StitchExportButton().IsEnabled(true);
-                    strongThis->StitchStatusText().Text(
-                        ok ? L"Preview JPEG exported." : L"Preview export failed.");
+                    auto pixels = m_storage.ReadPixelBuffer(*finishTasks[0].outputBlobId);
+                    if (pixels.has_value())
+                    {
+                        auto endsWithCaseInsensitive = [&](const wchar_t* suffix)
+                        {
+                            std::wstring suffixStr(suffix);
+                            if (destPath.size() < suffixStr.size()) return false;
+                            std::wstring tail = destPath.substr(destPath.size() - suffixStr.size());
+                            std::transform(tail.begin(), tail.end(), tail.begin(), ::towlower);
+                            return tail == suffixStr;
+                        };
+
+                        if (endsWithCaseInsensitive(L".tif") || endsWithCaseInsensitive(L".tiff"))
+                        {
+                            ok = ::WindowsApp::Core::WriteTiff16RGB(destPath, pixels->data.data(), pixels->width, pixels->height);
+                        }
+                        else
+                        {
+                            std::vector<unsigned char> rgb8(pixels->data.size());
+                            for (size_t i = 0; i < pixels->data.size(); ++i)
+                                rgb8[i] = static_cast<unsigned char>(pixels->data[i] >> 8);
+
+                            std::vector<unsigned char> jpegBytes;
+                            if (m_nvJpegCodec->Encode(rgb8.data(), pixels->width, pixels->height, 90, jpegBytes)
+                                == ::WindowsApp::Compute::ComputeResult::SUCCESS)
+                            {
+                                ::WindowsApp::Core::PlatformFile file;
+                                if (file.Open(destPath, ::WindowsApp::Core::FileOpenMode::CreateAlways))
+                                {
+                                    ok = file.Write(jpegBytes.data(), jpegBytes.size());
+                                    file.Close();
+                                }
+                            }
+                        }
+                    }
                 }
+
+                dispatcher.TryEnqueue([weakThis, ok]
+                {
+                    if (auto strongThis{ weakThis.get() })
+                    {
+                        strongThis->ExportButton().IsEnabled(true);
+                        strongThis->RunStatusText().Text(ok ? L"Result exported." : L"Export failed.");
+                    }
+                });
             });
-        });
+        }
+        else
+        {
+            m_exportThread = std::jthread([this, weakThis, dispatcher, destPath]()
+            {
+                ::WindowsApp::Core::PanoramaExporter exporter(m_project, m_storage, m_nvJpegCodec);
+                bool ok = exporter.ExportPreviewJpeg(destPath, 4096);
+
+                dispatcher.TryEnqueue([weakThis, ok]
+                {
+                    if (auto strongThis{ weakThis.get() })
+                    {
+                        strongThis->ExportButton().IsEnabled(true);
+                        strongThis->RunStatusText().Text(
+                            ok ? L"Preview JPEG exported." : L"Preview export failed.");
+                    }
+                });
+            });
+        }
     }
 }
